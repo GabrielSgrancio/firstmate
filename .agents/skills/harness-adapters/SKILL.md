@@ -3,7 +3,7 @@ name: harness-adapters
 description: >-
   Agent-only reference for firstmate harness operations.
   Use before spawning or recovering a crewmate or secondmate, handling a trust dialog, sending a harness-specific skill invocation, interrupting or exiting an agent, resuming an exited agent, or verifying a new harness adapter.
-  Contains verified facts for claude, codex, opencode, pi, pi-signed, grok, kimi, cursor, and muse.
+  Contains verified facts for claude, codex, opencode, pi, pi-signed, grok, kimi, cursor, and muse, plus experimental crew/scout-only facts for antigravity (agy).
 user-invocable: false
 metadata:
   internal: true
@@ -133,6 +133,7 @@ The supported launch-profile flags below are verified locally; each row records 
 | kimi | `--model <model>` | none | Verified 2026-07-25 on Kimi Code CLI 0.29.1. |
 | cursor | `--model <model>` | none | Verified 2026-08-11 on Cursor Agent CLI 2026.08.11-e8db854. No effort flag exists, so firstmate records the requested effort in task metadata and omits it from the launch. Validate ids against `cursor-agent --list-models` rather than assuming a low/medium/high family: the live catalog carries only `-high` Grok ids. |
 | muse | `--model <model>` | `--reasoning-effort <low\|medium\|high\|xhigh>`, and `ultra` only for an explicit `max` | Verified 2026-08-05 on Muse Code 0.1.0-R708.1. The flag accepts `none\|minimal\|low\|medium\|high\|xhigh\|ultra` and defaults to `high`. `ultra` is muse's max-class level, so it is reachable only through an explicit captain `max`, never from the generic fallback; `none` and `minimal` sit below the shared vocabulary and stay unreachable. |
+| antigravity | `--model <model>` | `--effort <low\|medium\|high>` | EXPERIMENTAL, crew/scout only (see the antigravity section below). Verified 2026-08-05 on agy 1.1.9/1.1.10. `--effort` only applies to a base model name (e.g. `gemini-3.6-flash`); a fully-qualified slug (e.g. `gemini-3.6-flash-high`) already encodes effort and rejects `--effort` as conflicting. Per-model effort ceilings vary (e.g. `gemini-3.1-pro` has no `medium`; `gpt-oss-120b` only has `medium`; `claude-sonnet-4-6`/`claude-opus-4-6-thinking` accept no `--effort` at all) and are enforced by agy itself with a clean structured error, not pre-validated by fm-spawn. |
 
 The concrete `harness` field owns adapter identity independently of the model provider: `harness=pi` with `model=xai/grok-*` is Pi using xAI, not `harness=grok`, and does not require Grok CLI login; `harness=grok` remains the standalone Grok Build CLI adapter.
 Likewise, `harness=cursor` with `model=cursor-grok-4.5-*` is Cursor Agent CLI routing a Grok model, not the xAI Grok Build `grok` harness.
@@ -152,6 +153,7 @@ Use the discovery surface in the current authenticated environment because suppo
 | grok | Run `grok models`, which lists the models available to the current Grok installation and account. |
 | kimi | Run `kimi provider list --json`, which lists the current provider and model configuration. |
 | cursor | Run `cursor-agent --list-models` (or the legacy `agent --list-models`), which lists the ids available to the current Cursor account. `cursor` is not the CLI name. |
+| antigravity | Run `agy models`, which lists the model slugs available to the current authenticated account; the CLI's own "invalid model selection" error additionally echoes display names and, for a rejected effort, the accepted efforts for that exact model. |
 
 For an unfamiliar harness or model namespace, establish support and provider identity from that harness's authoritative CLI help, model listing, or current documentation rather than guessing from a name or prefix.
 A listing that reaches the account and does not contain the model is concrete evidence the model is unsupported: block that candidate and quote the result.
@@ -534,3 +536,27 @@ A teardown refusal naming muse scratch is therefore correct behavior: inspect it
 muse is a day-0 `0.1.0` beta whose launcher polls a release channel hourly and can replace the running binary underneath the fleet, changing the process name with it.
 The captain accepted that risk, so firstmate does NOT set `MUSE_NO_AUTO_UPDATE=1`; a fleet that later wants stability can set it in the launch environment without any adapter change.
 Its plugin/hook engine reports `plugins are not available in this build` unless `MUSE_EXPERIMENTAL_PLUGINS=on`, which is why the busy source reads the session log instead of installing a hook.
+## antigravity (EXPERIMENTAL, crew/scout only, 2026-08-05, agy 1.1.9/1.1.10)
+
+Google Antigravity CLI (`agy`), verified through a captain-approved local investigation using `fm-spawn`'s raw-launch-command escape hatch against a disposable scratch project, then implemented and re-verified through the real adapter end to end.
+Not extended to `--secondmate` in this first cut; `launch_template` in `fm-spawn.sh` refuses a secondmate spawn for this harness.
+This entry documents a genuinely partial verification: some facts below are live-verified, one (interrupt) is a documented risk, and busy-state classification is deliberately left unverified.
+
+| Fact | Value |
+|---|---|
+| Binary | Executable `agy` from `PATH`; no fallback path is known (unlike Kimi's `~/.kimi-code/bin/kimi`, the official installer's `~/.local/bin/agy` is not hardcoded - PATH resolution only). |
+| Busy state | UNVERIFIED (`fm_busy_antigravity_verified` gate, same shape as Kimi's). A candidate rendered-tail signal was observed (footer `esc to cancel` while busy vs `? for shortcuts` while idle, plus a `○`/`●` marker on the in-flight vs completed tool-call line) but was not put through the same live audit that qualified Grok's isolated rendered-tail fallback, so every antigravity task classifies `unknown antigravity-unverified` regardless of rendered content. |
+| Exit command | `/exit`; prints a resume hint (`agy --conversation=<id>` or `-c`). Submitting `/exit` (and other `/`-prefixed commands like `/tasks`) reproducibly reports `delivery unconfirmed` from `fm-send`'s generic verification even though the command DID land - a false-negative submission-acknowledgement hazard, same class already documented for grok/codex/kimi, not yet given its own settle fix. |
+| Interrupt | Single Escape stops the model's own turn/wait, but does **NOT** reliably kill an in-flight background Bash tool call - live-verified by PID: a `sleep 45` subprocess was still alive 6 seconds after Escape, and agy's own `/tasks` panel later showed that same command `completed (exit 0)`, not cancelled. A real kill exists only via the `/tasks` panel (navigate to the task, press `k` to kill it), not a bare Escape. Treat "interrupt" as a documented partial/experimental capability, not a verified safe-cancellation guarantee. |
+| Resume | `agy -c` (or `agy --conversation=<id>`, id printed by `/exit`) restores full conversation history, but does **NOT** preserve the original `--model`/`--effort` selection - a real resume that needs the same model must pass `--model`/`--effort` explicitly alongside `-c`. |
+| Trust dialog | First launch in a fresh worktree shows "Do you trust the contents of this project?" as an arrow-key menu ("Yes, I trust this folder" pre-selected; footer `Navigate ... Confirm`, distinct from the idle footer). Same documented pattern as codex/pi: NOT auto-accepted by `fm-spawn`; a supervising firstmate session peeks the window and accepts with a plain Enter. `fm-spawn`'s post-launch readiness wait (`agy_wait_for_ready`, gated on the idle footer `? for shortcuts`) simply times out and fails the spawn if the dialog is still showing, naming the window to inspect. |
+| Autonomy | `--dangerously-skip-permissions`; live-verified end to end (Read/ListDir/Edit/Bash tool calls all ran with zero approval prompts in both the raw-launch smoke test and the real-adapter E2E test). |
+| Launch/delivery shape | Like Kimi, no initial positional or `-i`/`--prompt-interactive` prompt was verified at launch time, so `fm-spawn` launches agy bare and delivers only an absolute brief pointer (`Read the brief at <path> and follow it exactly.`) after the readiness gate - the exact shape live-verified in both the raw-launch smoke test and the real-adapter E2E test. Unlike Kimi, no silent-drop-before-ready hazard was observed for a plain-text send after that gate, so the adapter does not carry Kimi's extra composer-content delivery-confirmation layer; this is a scope decision based on absence of evidence, not proof the hazard cannot occur. |
+| Environment marker | None observed during the 2026-08-05 investigation; detection relies on process ancestry command name `agy` (`bin/fm-harness.sh`), same tier as Kimi/codex/opencode. |
+| Composer | A bare `>` prompt bounded by plain dashed-line separators (`────`), not `│`/`┃`/`|` box-drawing characters like Kimi's bordered box. Whether the shared structural composer reader (`bin/backends/tmux.sh`, `bin/fm-composer-lib.sh`) recognizes this dashed-line shape as a genuine bordered container, versus reading the bare `>` as an unstructured row, was not verified at the unit level; every manual `fm-send`/`fm-peek` call in both investigations worked correctly in practice, but this specific edge is untested and no `FM_COMPOSER_IDLE_RE` override was added. |
+| Account/plan visibility | The interactive banner displays the authenticated account email and plan tier (e.g. "Google AI Pro") - useful as a non-destructive proof that authentication is live, but never log or copy it into shared, tracked material. |
+
+Model discovery is exclusively from `agy models` and the CLI's own structured `--model`/`--effort` error messages (see the [Model support discovery table](#model-support-discovery) above) - never a hardcoded list.
+`agy` 1.1.9/1.1.10 exposed 11 models on the investigating account: three effort tiers each for `gemini-3.6-flash`, `gemini-3.5-flash` (low/medium/high), two for `gemini-3.1-pro` (low/high, no medium), and single fixed models `claude-sonnet-4-6`, `claude-opus-4-6-thinking`, `gpt-oss-120b-medium` with no `--effort` support (or, for gpt-oss-120b, only the `medium` tier via the base name).
+Every one of those 11 slugs was live-verified with a non-destructive `--print "Reply with exactly: AGY_OK"` probe (exit 0, exact reply), corroborated by a per-family self-identification probe to rule out a silent cross-model fallback.
+This exact roster is a point-in-time fact about one account and version, not a permanent namespace; always re-run `agy models` rather than reusing this list.
