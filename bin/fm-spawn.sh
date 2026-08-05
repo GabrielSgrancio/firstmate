@@ -83,8 +83,10 @@
 #   profile consultation. A --secondmate spawn is exempt and resolves the SECONDMATE
 #   harness (config/secondmate-harness -> config/crew-harness -> own), so the
 #   secondmate-vs-crewmate split is DURABLE across every respawn (recovery,
-#   /updatefirstmate, restart). A bare adapter name (claude|codex|opencode|pi|pi-signed|grok|kimi)
-#   overrides it for this spawn (either kind). A non-flag string containing
+#   /updatefirstmate, restart). A bare adapter name
+#   (claude|codex|opencode|pi|pi-signed|grok|kimi|antigravity)
+#   overrides it for this spawn (crew/scout kind only; antigravity is not yet
+#   extended to --secondmate). A non-flag string containing
 #   whitespace is treated as a RAW launch command - the escape hatch for verifying
 #   new adapters. pi-signed launches that exact executable name from PATH and
 #   refuses before endpoint creation when it is unavailable; it never falls back to pi.
@@ -798,6 +800,23 @@ launch_template() {
     # Its turn-end signal is a globally configured Stop hook plus a guarded
     # per-task worktree token, so no launch placeholder belongs here.
     kimi) printf '%s' '__KIMIBIN__ __MODELFLAG__--auto' ;;
+    # antigravity (Google's agy CLI): not extended to --secondmate in this
+    # first cut (AGENTS.md task lifecycle - crew/scout only until reliability
+    # is proven), so a secondmate spawn gets the same "no launch template"
+    # refusal as a genuinely unrecognized harness. --dangerously-skip-permissions
+    # is agy's verified equivalent of claude's autonomy flag (live-verified:
+    # Read/ListDir/Bash tool calls ran with no approval prompt). Like Kimi, an
+    # initial positional/`-i` prompt was never live-verified, so agy launches
+    # bare and receives only an absolute brief pointer after the TUI readiness
+    # gate below - the exact shape empirically verified in the 2026-08-05 smoke
+    # test. agy has no reasoning-effort-less mode of its own; when neither
+    # --model nor --effort is supplied, launching with no axis flags is only
+    # correct if the account's own default model needs none, so a real spawn
+    # should always pass an explicit --model.
+    antigravity)
+      [ "$kind" = secondmate ] && return 1
+      printf '%s' '__AGYBIN__ __MODELFLAG____EFFORTFLAG__--dangerously-skip-permissions'
+      ;;
     *) return 1 ;;
   esac
 }
@@ -906,11 +925,34 @@ resolve_kimi_binary() {
   return 1
 }
 
+# resolve_agy_binary: agy has no documented fallback install path beyond
+# PATH (the official installer places it at ~/.local/bin/agy, verified
+# 2026-08-05 on agy 1.1.9/1.1.10, but firstmate resolves through PATH rather
+# than hardcoding that location).
+resolve_agy_binary() {
+  local candidate dir
+  candidate=$(command -v agy 2>/dev/null || true)
+  if [ -n "$candidate" ] && [ -x "$candidate" ]; then
+    case "$candidate" in
+      /*) printf '%s\n' "$candidate"; return 0 ;;
+      *)
+        dir=$(cd "$(dirname "$candidate")" 2>/dev/null && pwd -P) || dir=
+        if [ -n "$dir" ]; then
+          printf '%s/%s\n' "$dir" "$(basename "$candidate")"
+          return 0
+        fi
+        ;;
+    esac
+  fi
+  echo "error: agy executable not found on PATH" >&2
+  return 1
+}
+
 model_flag_for_harness() {
   local harness=$1 model=$2
   [ -n "$model" ] && [ "$model" != default ] || return 0
   case "$harness" in
-    claude|codex|opencode|pi|pi-signed|grok|kimi)
+    claude|codex|opencode|pi|pi-signed|grok|kimi|antigravity)
       printf -- '--model %s ' "$(shell_quote "$model")"
       ;;
   esac
@@ -954,6 +996,19 @@ effort_flag_for_harness() {
     # to a different, non-interactive launch mode, so fm-spawn does not pass it.
     # kimi likewise has no reasoning-effort flag; the requested axis stays in
     # task metadata but never reaches the launch command.
+    antigravity)
+      # agy 1.1.9/1.1.10 --effort accepts only low|medium|high (verified via
+      # --help and live probes); xhigh and max are omitted rather than passed.
+      # agy additionally enforces a PER-MODEL effort ceiling that fm-spawn does
+      # NOT pre-validate here (e.g. gemini-3.1-pro has no medium, gpt-oss-120b
+      # only has medium, claude-sonnet-4-6/claude-opus-4-6-thinking accept no
+      # --effort at all) - an incompatible combination is caught by agy's own
+      # clean structured error inside the pane after launch, not by fm-spawn
+      # before it. Discover the exact live matrix with `agy models`.
+      case "$effort" in
+        low|medium|high) printf -- '--effort %s ' "$(shell_quote "$effort")" ;;
+      esac
+      ;;
   esac
 }
 
@@ -967,6 +1022,12 @@ case "$LAUNCH" in
         exit 1
       }
     fi
+    ;;
+esac
+case "$LAUNCH" in
+  *__AGYBIN__*)
+    AGY_BIN=$(resolve_agy_binary) || exit 1
+    LAUNCH=${LAUNCH//__AGYBIN__/$(shell_quote "$AGY_BIN")}
     ;;
 esac
 
@@ -1642,6 +1703,40 @@ kimi_spawn_fail() {  # <detail>
   echo "error: $1; inspect window $T" >&2
 }
 
+# agy (antigravity) readiness gate: unlike Kimi, no silent-drop-before-ready
+# hazard was live-verified for agy (a plain-text pointer sent after an
+# explicit ready check landed cleanly, first Enter, in the 2026-08-05 smoke
+# test), so this stays a simple idle-footer wait rather than Kimi's extra
+# composer-content delivery-confirmation layer. The idle footer "? for
+# shortcuts" only appears once the interactive TUI is fully up; agy's
+# first-run-per-directory trust dialog ("Do you trust the contents of this
+# project?") shows a DIFFERENT footer ("Navigate ... Confirm") and is
+# deliberately NOT auto-accepted here, matching the documented codex/pi
+# pattern (AGENTS.md-adjacent harness-adapters skill): a supervising
+# firstmate session peeks the window and accepts it with a manual Enter if
+# still showing after this wait times out.
+agy_capture() {
+  fm_backend_capture "$BACKEND" "$T" 120 "$W" 2>/dev/null || true
+}
+
+agy_wait_for_ready() {
+  local pane i=0 max=${FM_AGY_READY_POLLS:-60} interval=${FM_AGY_POLL_INTERVAL:-0.5}
+  while [ "$i" -lt "$max" ]; do
+    pane=$(agy_capture)
+    if printf '%s\n' "$pane" | grep -Fq '? for shortcuts'; then
+      return 0
+    fi
+    i=$((i + 1))
+    [ "$i" -ge "$max" ] || sleep "$interval"
+  done
+  return 1
+}
+
+agy_spawn_fail() {  # <detail>
+  printf 'failed: %s\n' "$1" >> "$STATE/$ID.status"
+  echo "error: $1; inspect window $T" >&2
+}
+
 if [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
   spawn_send_text_line "$WT_TARGET" 'treehouse get'
 
@@ -1745,6 +1840,15 @@ if [ "$KIND" != secondmate ]; then
       # nothing can ever clear, so the arm waits for the wiring.
       if fm_busy_kimi_verified; then
         echo "error: kimi semantic busy-state wiring is not implemented; open the gate only together with verified wiring" >&2
+        exit 1
+      fi
+      ;;
+    antigravity*)
+      # Same shape as the Kimi arm above: standalone antigravity stays
+      # unknown until fm_busy_antigravity_verified opens on a live-verified
+      # semantic source (bin/fm-busy-lib.sh owns the gate).
+      if fm_busy_antigravity_verified; then
+        echo "error: antigravity semantic busy-state wiring is not implemented; open the gate only together with verified wiring" >&2
         exit 1
       fi
       ;;
@@ -2112,6 +2216,26 @@ if [ "$HARNESS" = kimi ]; then
   fi
   if ! kimi_wait_for_delivery; then
     kimi_spawn_fail "kimi brief pointer delivery was not confirmed"
+    exit 1
+  fi
+fi
+if [ "$HARNESS" = antigravity ]; then
+  if ! agy_wait_for_ready; then
+    agy_spawn_fail "agy did not show a verified idle ready signal before brief delivery (a first-run trust dialog may be waiting for a manual Enter - peek the window)"
+    exit 1
+  fi
+  AGY_POINTER="Read the brief at $BRIEF_REAL and follow it exactly."
+  AGY_SUBMIT_RETRIES=${FM_AGY_SUBMIT_RETRIES:-3}
+  AGY_SUBMIT_SLEEP=${FM_AGY_SUBMIT_SLEEP:-${FM_AGY_POLL_INTERVAL:-0.5}}
+  AGY_SUBMIT_SETTLE=${FM_AGY_SUBMIT_SETTLE:-0}
+  AGY_SUBMIT_VERDICT=$(fm_backend_send_text_submit \
+    "$BACKEND" "$T" "$AGY_POINTER" "$AGY_SUBMIT_RETRIES" \
+    "$AGY_SUBMIT_SLEEP" "$AGY_SUBMIT_SETTLE" "$W") || {
+    agy_spawn_fail "agy brief pointer could not be submitted"
+    exit 1
+  }
+  if [ "$AGY_SUBMIT_VERDICT" = send-failed ]; then
+    agy_spawn_fail "agy brief pointer could not be submitted"
     exit 1
   fi
 fi
