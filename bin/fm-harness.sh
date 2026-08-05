@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Detect the agent harness this process tree runs on.
-# Usage: fm-harness.sh                  print own harness: claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|gemini|muse|rovo|omp|unknown
+# Usage: fm-harness.sh                  print own harness: claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|gemini|muse|rovo|omp|antigravity|unknown
 #        fm-harness.sh crew             print the effective CREWMATE harness
 #                                        (config/crew-harness; "default" resolves to own)
 #        fm-harness.sh secondmate       print the harness the PRIMARY uses to launch
@@ -150,6 +150,10 @@ detect_own() {
       # prefix rather than any exact name. Deliberately anchored, never *muse*, so
       # unrelated commands (musescore, amuse) cannot be misread as this harness.
       muse|muse-bin-*) echo muse; return ;;
+      # agy (Google Antigravity CLI) is markerless like kimi/codex/opencode; no
+      # verified env marker was found during 2026-08-05 smoke testing, so
+      # detection relies on process ancestry command name only.
+      agy) echo antigravity; return ;;
       pi-signed) echo pi; return ;;
       pi) echo pi; return ;;
       # omp is a Bun-compiled single binary whose process name is exactly `omp`

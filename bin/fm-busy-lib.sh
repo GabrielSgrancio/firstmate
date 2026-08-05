@@ -37,6 +37,8 @@
 #   codex-hook, codex-appserver  reserved: Codex, gated by
 #                    fm_busy_codex_semantic_source
 #   kimi-wire, kimi-hook  reserved: standalone Kimi, gated by fm_busy_kimi_verified
+#   antigravity-wire, antigravity-hook  reserved: standalone antigravity (agy),
+#                    gated by fm_busy_antigravity_verified
 # Firstmate-owned sources accepted for every converted adapter:
 #   fm-spawn         the launch-brief turn seeded at spawn
 #   fm-interrupt     the legacy Claude fm-send --key Escape idle event
@@ -44,12 +46,14 @@
 # Classifier-only sources (never written into a record):
 #   endpoint-gone, herdr-native, grok-regex, rovo-regex, muse-session-log,
 #   cursor-transcript, missing, malformed, gen-mismatch, source-mismatch,
-#   kimi-unverified, codex-unverified, capture-failed, no-target
+#   kimi-unverified, codex-unverified, antigravity-unverified,
+#   capture-failed, no-target
 #
 # Classification (fm_busy_classify): busy | idle | unknown | dead, always
 # with the producing source as the second token. Precedence:
 #   1. dead endpoint (fm_busy_classify_live only) -> dead endpoint-gone
 #   2. standalone Kimi before verification       -> unknown kimi-unverified
+#   2b. standalone antigravity before verification -> unknown antigravity-unverified
 #   3. a valid, gen-matching, source-trusted record -> its state and source
 #   4. no record at all: herdr's native busy verdict is trusted as busy
 #      (generation state is sufficient for busy, not for idle), then the
@@ -115,6 +119,22 @@ FM_BUSY_KIMI_VERIFIED_VERSIONS=""
 
 fm_busy_kimi_verified() {
   [ -n "$FM_BUSY_KIMI_VERIFIED_VERSIONS" ]
+}
+
+# Standalone-antigravity (agy) verification gate, same shape as
+# fm_busy_kimi_verified. A 2026-08-05 raw-launch smoke test on agy 1.1.9/1.1.10
+# observed a candidate rendered signal (footer text "esc to cancel" while busy
+# vs "? for shortcuts" while idle) but did NOT go through the same live,
+# multi-signal, dated verification and captain-approved audit that qualified
+# Grok's isolated rendered-tail fallback, so it is recorded here as an
+# observation only, not wired as a classification source. Every standalone
+# antigravity task classifies unknown antigravity-unverified until this gate
+# opens on a live-verified source with recorded evidence in
+# docs/verification/supervision.md.
+FM_BUSY_ANTIGRAVITY_VERIFIED_VERSIONS=""
+
+fm_busy_antigravity_verified() {
+  [ -n "$FM_BUSY_ANTIGRAVITY_VERIFIED_VERSIONS" ]
 }
 
 # fm_busy_codex_appserver_observable: capability/version negotiation for the
@@ -202,6 +222,10 @@ fm_busy_sources_for_harness() {  # <harness>
     kimi*)
       fm_busy_kimi_verified || { printf ''; return 0; }
       adapter='kimi-wire kimi-hook'
+      ;;
+    antigravity*)
+      fm_busy_antigravity_verified || { printf ''; return 0; }
+      adapter='antigravity-wire antigravity-hook'
       ;;
     *) printf ''; return 0 ;;
   esac
@@ -864,6 +888,12 @@ fm_busy_classify() {  # <backend> <target> <harness> <id> <state-dir> [tail40]
     kimi*)
       if ! fm_busy_kimi_verified; then
         printf 'unknown kimi-unverified'
+        return 0
+      fi
+      ;;
+    antigravity*)
+      if ! fm_busy_antigravity_verified; then
+        printf 'unknown antigravity-unverified'
         return 0
       fi
       ;;
