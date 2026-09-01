@@ -2475,9 +2475,9 @@ if [ "$KIND" != secondmate ]; then
   # adapter with a verified semantic source. The launch brief sent below IS a
   # submitted turn, so the seed record is busy/fm-spawn. The minted gen is
   # embedded into each adapter's wiring so an event from a superseded
-  # incarnation is rejected as stale. Grok stays on its isolated rendered-tail
-  # fallback and standalone Kimi stays unknown until fm_busy_kimi_verified
-  # opens, so neither is armed here.
+  # incarnation is rejected as stale. Grok and antigravity use isolated
+  # rendered-tail pull sources, while standalone Kimi stays unknown until
+  # fm_busy_kimi_verified opens, so none of those adapters is armed here.
   BUSY_GEN=
   case "$HARNESS" in
     codex*)
@@ -2506,13 +2506,9 @@ if [ "$KIND" != secondmate ]; then
       fi
       ;;
     antigravity*)
-      # Same shape as the Kimi arm above: standalone antigravity stays
-      # unknown until fm_busy_antigravity_verified opens on a live-verified
-      # semantic source (bin/fm-busy-lib.sh owns the gate).
-      if fm_busy_antigravity_verified; then
-        echo "error: antigravity semantic busy-state wiring is not implemented; open the gate only together with verified wiring" >&2
-        exit 1
-      fi
+      # Version-gated rendered pull source: no gen or stored record is armed,
+      # because there is no writer that could settle a seed.
+      :
       ;;
   esac
   case "$HARNESS" in

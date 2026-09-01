@@ -209,6 +209,22 @@ Each pass polled `state/<id>.busy-state` while a real turn ran.
 | Codex | codex-cli 0.145.0 | None usable | See below; classifies `unknown codex-unverified`. |
 | Kimi (standalone) | not installed | None usable | No binary on `PATH`, so the gate stays closed and it classifies `unknown kimi-unverified`. |
 | Grok | 0.2.112 | Isolated rendered-tail fallback | Retained unconverted; the approved audit could not credit a live structured-lifecycle run. |
+| Antigravity | agy 1.1.23 | Version-gated isolated rendered-tail fallback | An active model turn showed `esc to cancel`; a settled model with a live background command showed `? for shortcuts` plus `2 task(s) · /tasks`; the fully settled tail showed `? for shortcuts` with no task counter. Either positive signal independently classified busy, while idle required both to be absent. |
+
+Antigravity's source was audited on 2026-09-01 against the real authenticated TUI, not a fixture.
+The animated `○` and `●` tool-line marker changed while the command ran, so it was rejected as a state signal.
+The independent positive surfaces were deliberately separated by moving a real `sleep` command into agy's background task manager: the model had already settled to `? for shortcuts` while the task counter still proved work was active.
+The background tool call and completion wake appeared in agy's own transcript as:
+
+```text
+tool_calls: run_command {CommandLine:"sleep 4; printf BG_DONE", WaitMsBeforeAsync:500}
+Tool is running as a background task with task id: <conversation>/task-10
+[Message] ... task-10 finished ... exit code 0 ... BG_DONE
+BG_WAKE
+```
+
+The installed-version gate is exact.
+Any version other than `1.1.23` returns `unknown antigravity-unverified` until the live guard below is rerun and the verified set is updated.
 
 Codex was probed two ways, both refused:
 
@@ -232,7 +248,7 @@ tests/fm-crew-state.test.sh
 
 ## Turn-end guard
 
-The blocking and bounded-follow-up mechanisms were validated across six harnesses on 2026-07-08 through 2026-08-13, with Claude's replacement Stop-owned path revalidated on 2026-07-24 and Cursor's stop-hook park validated on 2026-08-13.
+The blocking and bounded-follow-up mechanisms were validated across seven harnesses on 2026-07-08 through 2026-09-01, with Claude's replacement Stop-owned path revalidated on 2026-07-24, Cursor's stop-hook park validated on 2026-08-13, and Antigravity's Stop contract validated on 2026-09-01.
 
 | Harness | Version verified | Mechanism | Observed result |
 | --- | --- | --- | --- |
@@ -242,6 +258,65 @@ The blocking and bounded-follow-up mechanisms were validated across six harnesse
 | Pi | 0.80.5 | Passive `agent_settled` callback | Exactly one guard follow-up ran for an unhealthy cycle, with no recursion across tool turns. |
 | Grok | 0.2.112 native and 0.2.73 pre-native | Running-payload adaptive `Stop` | Native false-to-true continuation stayed in one process with two model turns and zero resume launches; the field-absent pre-native process launched exactly one guarded resume. |
 | Cursor | 2026.08.11-e8db854 | Awaited `stop` hook park returning one `followup_message` | Exit 2 ended the turn normally, proving it cannot block; a returned follow-up ran a genuine second turn; a sleeping hook held the boundary open and the wake landed after it; `loop_limit` stopped the hook being invoked at its ceiling. |
+| Antigravity | agy 1.1.23 | Workspace-local `.agents/hooks.json` `Stop` command returning a JSON decision | agy invoked the command from the directory containing `hooks.json`; `executionNum` advanced from 0 to 1; `decision=continue` injected `Stop hook blocked termination: PROBE_CONTINUE` and ran a second model turn; `decision=allow` then ended the turn. |
+
+### Antigravity primary and interrupt boundary, 2026-09-01
+
+The live hook discovery began from agy's own `hooks_manager.go` load log and `/hooks` UI rather than assuming Claude's schema.
+agy 1.1.23 exposed five hook types: `PreToolUse`, `PostToolUse`, `PreInvocation`, `PostInvocation`, and `Stop`.
+With one workspace-local hook installed, `/hooks` reported one Stop hook.
+
+A relative command first failed in agy's own log:
+
+```text
+JSON hook command stderr: sh: ./.agents/probe-hook.sh: No such file or directory
+```
+
+An absolute probe then recorded that the hook process working directory was the directory containing `.agents/hooks.json`, with no workspace-root environment variable.
+This is why the tracked command uses `../bin/fm-agy-turnend-guard.sh` and includes its own loud path-drift fallback.
+The real Stop payload, with private paths and ids elided, was:
+
+```json
+{"conversationId":"<id>","error":"","executionNum":0,"fullyIdle":true,"modelName":"gemini-3.7-flash-low","terminationReason":"NO_TOOL_CALL","transcriptPath":"<path>","workspacePaths":["<workspace>"]}
+```
+
+Returning `{"decision":"continue","reason":"PROBE_CONTINUE"}` produced:
+
+```text
+Stop hook blocked termination: PROBE_CONTINUE
+```
+
+The model then repeated its response in the same conversation, and the next Stop payload carried `executionNum:1`.
+Returning `{"decision":"allow"}` ended that turn.
+The production adapter maps that counter to the shared `stop_hook_active` predicate and never drains the wake queue in the hook.
+
+The same agy 1.1.23 session confirmed that the `/tasks` panel can kill only the currently selected row with `k`.
+Rows are dynamically sorted by time and display command text and status but expose no stable selectable task id to an external control command.
+After `k`, the panel rendered the selected killed command as `completed (exit 0)` with no output, while agy's transcript reported the same task as:
+
+```text
+Task id "<conversation>/task-18" was canceled with result:
+Tool execution was canceled
+```
+
+This proves the interactive capability exists but does not provide a race-safe addressable primitive for `bin/fm-control-lib.sh` across supported backends.
+The gap is vendor-blocked, the control integration remains absent, and `fm-spawn.sh` continues to refuse antigravity `--secondmate` launches.
+
+The portable executable checks are:
+
+```sh
+tests/fm-agy-turnend-guard.test.sh
+tests/fm-antigravity-harness.test.sh
+tests/fm-supervision-instructions.test.sh
+```
+
+The env-gated drift guard is:
+
+```sh
+FM_ANTIGRAVITY_PRIMARY_LIVE_E2E=1 tests/fm-antigravity-primary-live-e2e.test.sh
+```
+
+It launches the real interactive TUI in a pre-trusted candidate workspace, proves actual Stop-hook execution through a forced continuation, drives the two busy signals apart with a real background command, and fails naming `antigravity agy <version>`.
 
 ### Cursor primary park, 2026-08-13
 
@@ -456,6 +531,7 @@ grok 0.2.103 (89c3d36fb6f1) [stable]
 | OpenCode | `FM_OPENCODE_LIVE_E2E=1 tests/fm-opencode-primary-live-e2e.test.sh` | A verified successor existed before prompt handling, with no model re-arm or turn-end fallback. |
 | Pi | `FM_PI_LIVE_E2E=1 tests/fm-pi-primary-live-e2e.test.sh` | One initial tool call led to extension-owned successors and clean child retirement on exit. |
 | Grok | `FM_GROK_LIVE_E2E=1 tests/fm-grok-continuity-live-e2e.test.sh` | Native task completion surfaced the actionable close and the cycle ledger recorded `reason=actionable-signal`. |
+| Antigravity | `FM_ANTIGRAVITY_PRIMARY_LIVE_E2E=1 tests/fm-antigravity-primary-live-e2e.test.sh` | The real Stop hook forced one same-session continuation; active-turn and background-task signals each independently classified busy; the settled footer classified idle. |
 
 Pi 0.81.1 repeated the continuity and clean-exit lifecycle on 2026-07-23 after the Calm presentation changes.
 

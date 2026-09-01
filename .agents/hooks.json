@@ -1,0 +1,12 @@
+{
+  "firstmate-primary-supervision": {
+    "enabled": true,
+    "Stop": [
+      {
+        "type": "command",
+        "command": "if [ -x ../bin/fm-agy-turnend-guard.sh ]; then exec ../bin/fm-agy-turnend-guard.sh; else printf '%s\\n' '{\"decision\":\"continue\",\"reason\":\"firstmate agy turn-end guard unavailable: expected ../bin/fm-agy-turnend-guard.sh from the hook directory. Run bin/fm-session-start.sh and repair the agy hook before ending this turn.\"}'; fi",
+        "timeout": 30
+      }
+    ]
+  }
+}

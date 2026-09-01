@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
-# Behavior tests for the experimental Google Antigravity CLI (agy) crewmate
-# adapter. Unlike the verified harnesses, antigravity's busy-state source
-# stays gated unknown (bin/fm-busy-lib.sh fm_busy_antigravity_verified) and
-# it is deliberately not extended to --secondmate in this first cut.
+# Behavior tests for the Google Antigravity CLI (agy) crew and primary adapter.
+# Its version-gated rendered busy source is verified, while --secondmate stays
+# refused because no safe addressable interrupt exists across supported backends.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -93,7 +92,12 @@ exit 0
 SH
   chmod +x "$fakebin/tmux"
   fm_fake_exit0 "$fakebin" treehouse gh-axi gh
-  fm_fake_exit0 "$fakebin" agy
+  cat > "$fakebin/agy" <<'SH'
+#!/usr/bin/env bash
+[ "${1:-}" = --version ] && printf '1.1.23\n'
+exit 0
+SH
+  chmod +x "$fakebin/agy"
   printf '%s\n' "$fakebin"
 }
 
@@ -280,17 +284,48 @@ SH
   pass "fm-harness: markerless antigravity (agy) is detected by ancestry after env-marker precedence"
 }
 
-test_antigravity_busy_state_classifies_unverified() {
-  local state
+test_antigravity_busy_state_uses_two_independent_positive_signals() {
+  local state out
   # shellcheck source=/dev/null
   . "$ROOT/bin/fm-busy-lib.sh"
   state="$TMP_ROOT/busy-state"
   mkdir -p "$state"
-  [ "$(fm_busy_classify tmux fake antigravity agy-busy-z7 "$state" 'esc to cancel')" = "unknown antigravity-unverified" ] \
-    || fail "an antigravity task must classify unknown antigravity-unverified even with a busy-looking footer"
-  [ "$(fm_busy_classify tmux fake antigravity agy-busy-z7 "$state" '? for shortcuts')" = "unknown antigravity-unverified" ] \
-    || fail "an antigravity task must classify unknown antigravity-unverified even with an idle-looking footer"
-  pass "busy detection: antigravity stays unknown antigravity-unverified regardless of rendered footer text"
+  # shellcheck disable=SC2329 # invoked indirectly by fm_busy_antigravity_verified
+  fm_busy_antigravity_version() { printf '1.1.23'; }
+
+  out=$(fm_busy_classify tmux fake antigravity agy-busy-z7 "$state" 'Working...\nesc to cancel')
+  [ "$out" = "busy antigravity-rendered" ] \
+    || fail "the active-turn footer did not independently classify busy: $out"
+
+  out=$(fm_busy_classify tmux fake antigravity agy-busy-z7 "$state" '? for shortcuts\nGemini 3.7 Flash · low · 2 task(s) · /tasks')
+  [ "$out" = "busy antigravity-rendered" ] \
+    || fail "the background-task counter did not independently classify busy: $out"
+
+  out=$(fm_busy_classify tmux fake antigravity agy-busy-z7 "$state" '? for shortcuts\nGemini 3.7 Flash · low')
+  [ "$out" = "idle antigravity-rendered" ] \
+    || fail "the settled footer without either busy signal did not classify idle: $out"
+
+  out=$(fm_busy_classify tmux fake antigravity agy-busy-z7 "$state" '● Bash(done)\n>')
+  [ "$out" = "unknown antigravity-rendered" ] \
+    || fail "an ambiguous animated tool marker should stay unknown: $out"
+
+  [ -z "$(fm_busy_sources_for_harness antigravity)" ] \
+    || fail "antigravity must not trust a stored record source without a writer"
+  pass "busy detection: agy uses independent turn and task signals and narrows idle to a settled footer"
+}
+
+test_antigravity_busy_state_fails_closed_on_version_drift() {
+  local state out
+  # shellcheck source=/dev/null
+  . "$ROOT/bin/fm-busy-lib.sh"
+  state="$TMP_ROOT/busy-version-drift"
+  mkdir -p "$state"
+  # shellcheck disable=SC2329 # invoked indirectly by fm_busy_antigravity_verified
+  fm_busy_antigravity_version() { printf '1.1.24'; }
+  out=$(fm_busy_classify tmux fake antigravity agy-busy-z8 "$state" 'esc to cancel')
+  [ "$out" = "unknown antigravity-unverified" ] \
+    || fail "an unverified agy version must fail closed, got: $out"
+  pass "busy detection: an unverified agy version fails closed with a named source"
 }
 
 test_antigravity_launch_then_send_is_verified
@@ -300,4 +335,5 @@ test_antigravity_readiness_gate_precedes_pointer
 test_antigravity_missing_binary_refuses_before_pane_creation
 test_antigravity_secondmate_spawn_is_refused
 test_antigravity_detection_uses_ancestry_after_markers
-test_antigravity_busy_state_classifies_unverified
+test_antigravity_busy_state_uses_two_independent_positive_signals
+test_antigravity_busy_state_fails_closed_on_version_drift

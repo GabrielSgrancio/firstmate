@@ -34,14 +34,12 @@
 #   codex-hook, codex-appserver  reserved: Codex, gated by
 #                    fm_busy_codex_semantic_source
 #   kimi-wire, kimi-hook  reserved: standalone Kimi, gated by fm_busy_kimi_verified
-#   antigravity-wire, antigravity-hook  reserved: standalone antigravity (agy),
-#                    gated by fm_busy_antigravity_verified
 # Firstmate-owned sources accepted for every converted adapter:
 #   fm-spawn         the launch-brief turn seeded at spawn
 #   fm-interrupt     the legacy Claude fm-send --key Escape idle event
 #   fm-recovery      a documented recovery reset after relaunch
 # Classifier-only sources (never written into a record):
-#   endpoint-gone, herdr-native, grok-regex, muse-session-log,
+#   endpoint-gone, herdr-native, grok-regex, antigravity-rendered, muse-session-log,
 #   cursor-transcript, missing, malformed, gen-mismatch, source-mismatch,
 #   kimi-unverified, codex-unverified, antigravity-unverified,
 #   capture-failed, no-target
@@ -54,16 +52,16 @@
 #   3. a valid, gen-matching, source-trusted record -> its state and source
 #   4. no record at all: herdr's native busy verdict is trusted as busy
 #      (generation state is sufficient for busy, not for idle), then the
-#      muse session-log and cursor transcript pull sources, then the Grok-only
-#      temporary regex fallback classifies a grok task from its rendered tail,
-#      then unknown missing
+#      muse session-log and cursor transcript pull sources, then the isolated
+#      Grok and antigravity rendered-tail fallbacks, then unknown missing
 #   5. malformed, stale, or untrusted records -> unknown, never a fallback
-# The Grok arm is the ONLY rendered-text classification that survives the
-# redesign, because Grok's structured lifecycle was not credited-live-verified
-# in the approved audit; it is scoped to harness=grok and can never classify
-# another adapter. The delivery guards in bin/fm-composer-lib.sh match rendered
-# footers for submit acknowledgement and away-mode supervisor injection only;
-# neither is a recorded worker state source.
+# Grok and antigravity are the only rendered-text classifications that survive
+# the redesign because neither vendor exposes a reachable structured lifecycle
+# for an already-running TUI worker. Each fallback is version-gated, scoped to
+# its own harness, and backed by an opt-in real-harness drift guard. The delivery
+# guards in bin/fm-composer-lib.sh match rendered footers for submit
+# acknowledgement and away-mode supervisor injection only; neither is a
+# recorded worker state source.
 #
 # The muse pull source is semantic, not rendered: it folds muse's own durable
 # session event log. It has no writer, no arm, and no gen, because
@@ -116,20 +114,28 @@ fm_busy_kimi_verified() {
   [ -n "$FM_BUSY_KIMI_VERIFIED_VERSIONS" ]
 }
 
-# Standalone-antigravity (agy) verification gate, same shape as
-# fm_busy_kimi_verified. A 2026-08-05 raw-launch smoke test on agy 1.1.9/1.1.10
-# observed a candidate rendered signal (footer text "esc to cancel" while busy
-# vs "? for shortcuts" while idle) but did NOT go through the same live,
-# multi-signal, dated verification and captain-approved audit that qualified
-# Grok's isolated rendered-tail fallback, so it is recorded here as an
-# observation only, not wired as a classification source. Every standalone
-# antigravity task classifies unknown antigravity-unverified until this gate
-# opens on a live-verified source with recorded evidence in
-# docs/verification/supervision.md.
-FM_BUSY_ANTIGRAVITY_VERIFIED_VERSIONS=""
+# Standalone-antigravity (agy) rendered-tail gate. agy 1.1.23 was live-audited
+# on 2026-09-01 across an active model turn, an active background command after
+# the model settled, and the fully idle prompt. Positive BUSY proof comes from
+# either of two independent surfaces: the active-turn footer `esc to cancel`,
+# or the background-task counter `<n> task(s) · /tasks`. IDLE requires the idle
+# footer `? for shortcuts` and absence of both positive signals. The animated
+# tool-line ○/● glyph is deliberately not used. Exact output is recorded in
+# docs/verification/supervision.md and guarded by the opt-in live test.
+FM_BUSY_ANTIGRAVITY_VERIFIED_VERSIONS="1.1.23"
+
+fm_busy_antigravity_version() {
+  command -v agy >/dev/null 2>&1 || return 1
+  agy --version 2>/dev/null | sed -n '1s/^[[:space:]]*//;1s/[[:space:]]*$//;1p'
+}
 
 fm_busy_antigravity_verified() {
-  [ -n "$FM_BUSY_ANTIGRAVITY_VERIFIED_VERSIONS" ]
+  local version
+  version=$(fm_busy_antigravity_version) || return 1
+  case " $FM_BUSY_ANTIGRAVITY_VERIFIED_VERSIONS " in
+    *" $version "*) return 0 ;;
+  esac
+  return 1
 }
 
 # fm_busy_codex_appserver_observable: capability/version negotiation for the
@@ -197,9 +203,9 @@ fm_busy_current_gen() {  # <state-dir> <id>
 # fm_busy_sources_for_harness: the semantic sources trusted to classify a
 # task recorded with <harness>. One line, space-separated, possibly empty.
 # The firstmate-owned sources are appended for every converted adapter.
-# Grok and muse deliberately trust nothing: neither has a semantic WRITER, so
-# neither is armed, and both read their live source on demand in the classifier
-# (grok's rendered tail, muse's session log) rather than through a stored
+# Grok, antigravity, and muse deliberately trust nothing: none has a semantic
+# WRITER, so none is armed, and each reads its live source on demand in the classifier
+# (rendered tails or muse's session log) rather than through a stored
 # record. Listing a source here without a writer that can clear it would seed a
 # busy record nothing could ever settle.
 fm_busy_sources_for_harness() {  # <harness>
@@ -218,7 +224,8 @@ fm_busy_sources_for_harness() {  # <harness>
       ;;
     antigravity*)
       fm_busy_antigravity_verified || { printf ''; return 0; }
-      adapter='antigravity-wire antigravity-hook'
+      printf ''
+      return 0
       ;;
     *) printf ''; return 0 ;;
   esac
@@ -855,12 +862,34 @@ fm_busy_grok_tail_busy() {
     | grep -qiE "${FM_BUSY_REGEX:-${FM_DELIVERY_GROK_BUSY_REGEX_DEFAULT:-Ctrl\\+c:cancel}}"
 }
 
+# fm_busy_antigravity_tail_state: agy 1.1.23 rendered-tail pull source.
+# Consumes captured pane text and prints busy, idle, or unknown. Either positive
+# signal independently proves BUSY; IDLE is narrower and requires the idle
+# footer with neither positive signal in the bounded tail.
+fm_busy_antigravity_tail_state() {
+  local tail
+  tail=$(grep -v '^[[:space:]]*$' | tail -16)
+  if printf '%s\n' "$tail" | grep -qiF 'esc to cancel'; then
+    printf 'busy'
+    return 0
+  fi
+  if printf '%s\n' "$tail" | grep -qiE '[0-9]+ task\(s\)[[:space:]]*·[[:space:]]*/tasks'; then
+    printf 'busy'
+    return 0
+  fi
+  if printf '%s\n' "$tail" | grep -qiF '? for shortcuts'; then
+    printf 'idle'
+    return 0
+  fi
+  printf 'unknown'
+}
+
 # fm_busy_classify: semantic classification for a task whose endpoint the
 # caller has already established as present. Prints "<verdict> <source>":
 # busy|idle|unknown plus the producing source (see header). Never probes
 # process state. <tail40> is optional pre-captured plain output used only by
-# the Grok arm; when absent the Grok arm captures through fm_backend_capture
-# if available, else reports unknown capture-failed.
+# the Grok and antigravity pull sources; when absent they capture through
+# fm_backend_capture if available, else report unknown capture-failed.
 fm_busy_classify() {  # <backend> <target> <harness> <id> <state-dir> [tail40]
   local backend=$1 target=$2 harness=$3 id=$4 state=$5 tail40=${6-}
   local out rc r_state r_source native log
@@ -965,6 +994,25 @@ fm_busy_classify() {  # <backend> <target> <harness> <id> <state-dir> [tail40]
       else
         printf 'idle grok-regex'
       fi
+      return 0
+      ;;
+    antigravity*)
+      if [ -z "$tail40" ]; then
+        if command -v fm_backend_capture >/dev/null 2>&1; then
+          tail40=$(fm_backend_capture "$backend" "$target" 40 2>/dev/null) || {
+            printf 'unknown capture-failed'
+            return 0
+          }
+        else
+          printf 'unknown capture-failed'
+          return 0
+        fi
+      fi
+      case "$(printf '%s' "$tail40" | fm_busy_antigravity_tail_state)" in
+        busy) printf 'busy antigravity-rendered' ;;
+        idle) printf 'idle antigravity-rendered' ;;
+        *) printf 'unknown antigravity-rendered' ;;
+      esac
       return 0
       ;;
   esac

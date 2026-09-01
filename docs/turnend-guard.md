@@ -65,6 +65,10 @@ If `jq` is missing or hook stdin is empty, the guard exits 0 because it cannot s
   Do NOT widen this guard to `GROK_SESSION_ID`: Grok injects that into every child process, so it can survive into a Claude session that Grok launched and would silently disable Claude's own continuity.
   The same marker guard carries every tracked `.claude/settings.json` entry whose event Grok already covers through its own `.grok/hooks/` registration, which is both `Stop` entries, the `SessionStart` entry, and the two `PreToolUse` Bash entries; `bin/fm-subagent-pretool-check.sh` is the one deliberate unguarded exception because no Grok registration covers the subagent-spawn event, recorded in [`subagent-guard.md`](subagent-guard.md) "Known residual gap".
   `tests/fm-turnend-guard.test.sh` pins that inventory so neither the guarded set nor the exception can change silently.
+- Antigravity registers a workspace-local `Stop` hook in `.agents/hooks.json` and delegates its stdout decision contract to `bin/fm-agy-turnend-guard.sh`.
+  agy 1.1.23 starts the command with `.agents` as its working directory, so the tracked command uses `../bin/fm-agy-turnend-guard.sh` and returns a loud `decision=continue` repair when that relative path drifts.
+  The adapter maps `executionNum=0` to the shared initial predicate and every positive `executionNum` to `stop_hook_active=true`, which bounds an unhealthy cycle to one forced follow-up.
+  It never drains or acknowledges the wake queue inside the hook.
 
 Claude and Codex can block a Stop directly with exit status 2 and stderr.
 Both payloads carry `stop_hook_active`.
@@ -110,6 +114,12 @@ When both capability spellings are absent, the adapter preserves one pre-native 
 Malformed JSON, a selected field with a non-boolean type, missing `jq`, missing hook prerequisites, or an already-active legacy guard allows the stop without starting either continuation path.
 Grok's project hook requires the checkout to be trusted with `/hooks-trust` or launch-time `--trust`; genuine pre-native builds can run the same tracked hook from an isolated global hook directory.
 
+Antigravity consumes one JSON object on stdin and returns one JSON decision on stdout.
+The verified agy 1.1.23 Stop payload includes `executionNum`, `fullyIdle`, `modelName`, `conversationId`, `transcriptPath`, and `workspacePaths`.
+Returning `{"decision":"continue","reason":"..."}` injects the reason as a system message and runs another model turn in the same conversation; returning `{"decision":"allow"}` lets the stop finish.
+Invalid payloads and missing prerequisites also return a loud bounded continuation because agy otherwise swallows a hook command's nonzero exit and only logs it outside the conversation.
+The project must be trusted before agy loads `.agents/hooks.json`.
+
 Cursor cannot block a turn end at all: its blocked-response mapper returns an empty object for the `stop` step, so exit 2 is a silent no-op, verified both statically and live.
 `bin/fm-turnend-guard-cursor.sh` therefore never exits 2 and never writes a banner expecting it to be read; every path exits 0 and its only channel is at most one `followup_message` on stdout.
 Cursor runs that hook synchronously and awaits it, so one script owns both halves of the boundary.
@@ -148,6 +158,8 @@ That warning uses `bin/fm-supervision-instructions.sh --repair-line`, so it alwa
 - Cursor's `stop` step does not fire in headless `cursor-agent -p`, the same class of limit as OpenCode headless; firstmate primaries run interactive.
 - A Cursor primary must be launched with `--trust`, or its project hooks never load and the whole integration is inert.
 - Cursor's `preCompact` step is deliberately unregistered: its response can return only `user_message` and it is absent from Cursor's `additional_context` step set, so a post-compaction re-emit needs its own design and is deferred to a follow-up ([`sessionstart-nudge.md`](sessionstart-nudge.md) owns that uncovered surface).
+- Antigravity primary support is interactive only and verified on agy 1.1.23.
+- Antigravity secondmate launch remains refused because `/tasks` plus a selected-row `k` is the only vendor task cancellation surface and does not expose a stable task-addressing command for the control plane.
 - Kimi Code CLI 0.29.1 exposes only global `[[hooks]]` configuration in `~/.kimi-code/config.toml`, including a `Stop` event with snake_case payload fields `hook_event_name`, `session_id`, `cwd`, and `stop_hook_active`.
 - Kimi has no project-level hook configuration and remains outside the primary guard integrations above.
 - Captain-approved Kimi crew wake support uses `bin/fm-kimi-turnend-hook.sh` to edit only one marker-delimited Firstmate region in that global config and install a silent always-zero hook.
@@ -166,5 +178,7 @@ It also covers true-reason banner wording and reason-keyed episode dedup survivi
 `FM_CURSOR_PRIMARY_LIVE_E2E=1 tests/fm-cursor-primary-live-e2e.test.sh` is the opt-in guard that proves the same behavior against the installed cursor-agent and fails naming the harness and version.
 `tests/fm-kimi-harness.test.sh` covers the separate Kimi crew hook's format preservation, idempotence, refusal cases, token guard, spawn registration, and teardown cleanup.
 `tests/fm-supervision-instructions.test.sh` covers recovery-line ownership and pi-signed's identity-preserving reuse of Pi's protocol.
+`tests/fm-agy-turnend-guard.test.sh` executes the tracked `.agents/hooks.json` command from agy's real hook working directory and covers initial block, bounded follow-up, and invalid-payload repair behavior.
+`FM_ANTIGRAVITY_PRIMARY_LIVE_E2E=1 tests/fm-antigravity-primary-live-e2e.test.sh` is the opt-in guard that proves real Stop execution and rendered busy-signal separation, and every failure names antigravity and the installed agy version.
 `FM_PI_LIVE_E2E=1 tests/fm-pi-primary-live-e2e.test.sh` is the opt-in isolated Pi path.
 [`verification/supervision.md`](verification/supervision.md#turn-end-guard) records the active cross-harness empirical evidence, including the 2026-07-24 Claude `asyncRewake` revalidation.

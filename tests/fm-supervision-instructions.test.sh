@@ -108,6 +108,14 @@ test_cross_harness_ordinary_continuation_and_repair_matrix() {
   assert_contains "$out" "Grok tracked background task" "grok recovery line lost its tracked background repair"
   assert_contains "$out" "bin/fm-watch-arm.sh" "grok recovery line lost the arm command"
 
+  out=$("$RENDER" --harness antigravity)
+  ordinary=$(printf '%s\n' "$out" | grep -F -- '- Ordinary wake:')
+  assert_contains "$ordinary" "agy run_command background task" "antigravity ordinary-wake line lost tracked background ownership"
+  assert_contains "$ordinary" "bin/fm-watch-arm.sh" "antigravity ordinary-wake line lost the background arm command"
+  out=$("$RENDER" --harness antigravity --repair-line)
+  assert_contains "$out" "agy run_command background task" "antigravity recovery line lost its tracked background repair"
+  assert_contains "$out" "bin/fm-watch-arm.sh" "antigravity recovery line lost the arm command"
+
   out=$("$RENDER" --harness codex)
   ordinary=$(printf '%s\n' "$out" | grep -F -- '- Ordinary wake:')
   assert_contains "$ordinary" "next foreground" "codex ordinary-wake line lost its foreground checkpoint"
@@ -160,6 +168,18 @@ test_grok_command_sources_effective_config() {
   pass "grok rendered command sources the effective x-mode config"
 }
 
+test_antigravity_is_background_notify() {
+  local out
+  out=$("$RENDER" --harness antigravity)
+  assert_contains "$out" "Mode: Antigravity background-notify supervision." "antigravity snippet missing background-notify mode"
+  assert_contains "$out" "run_command" "antigravity snippet missing the verified tracked background tool"
+  assert_contains "$out" "WaitMsBeforeAsync" "antigravity snippet missing the real async argument"
+  assert_contains "$out" "executionNum" "antigravity snippet missing its Stop loop guard"
+  assert_contains "$out" "bin/fm-watch-arm.sh" "antigravity snippet missing watcher arm"
+  assert_not_contains "$out" "__FM_X_MODE_ENV" "renderer leaked an x-mode path placeholder"
+  pass "antigravity supervision uses real run_command completion notify with Stop backstop"
+}
+
 test_pi_snippet_uses_effective_extension_path() {
   local home out turnend watch
   home="$TMP_ROOT/pi-home"
@@ -186,4 +206,5 @@ test_cross_harness_ordinary_continuation_and_repair_matrix
 test_pi_signed_preserves_identity_with_pi_supervision_protocol
 test_grok_is_background_notify
 test_grok_command_sources_effective_config
+test_antigravity_is_background_notify
 test_pi_snippet_uses_effective_extension_path
