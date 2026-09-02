@@ -255,7 +255,7 @@ done
 # The ordered stage list is the contract behind the truncation banner: the child
 # names the stage it is entering, and the parent reports every stage at or after
 # that one as never emitted. Keep it in the exact order the digest prints.
-SESSION_START_STAGES='lock bootstrap wake-queue supervision-instructions read-once fleet-state network-checks context next-step'
+SESSION_START_STAGES='continuity lock bootstrap wake-queue supervision-instructions read-once fleet-state network-checks context next-step'
 
 stage() {  # <stage-name>: breadcrumb for the parent's truncation banner
   [ -n "${FM_SESSION_START_STAGE_FILE:-}" ] || return 0
@@ -618,7 +618,19 @@ if [ "$REEMIT" -eq 1 ]; then
 else
   section "SESSION START - $FM_HOME"
 fi
-# --- 1. lock -----------------------------------------------------------
+# --- 1. fleet continuity ----------------------------------------------------
+# The hub is optional. The helper fails closed, so an unreachable hub leaves
+# this home's local memory and backlog untouched rather than delaying startup.
+stage continuity
+section "MACHINE & FLEET CONTINUITY"
+"$SCRIPT_DIR/fm-machine-profile.sh" show 2>&1 || printf 'machine=default\nauthority=profile unreadable; existing Firstmate policy remains in force\ncapability=unchanged\n'
+if [ "$REEMIT" -eq 0 ]; then
+  "$SCRIPT_DIR/fm-sync-memory.sh" baton-read 2>&1 || printf 'BATON: UNCONFIRMED - hub unavailable; local memory remains available.\n'
+else
+  printf 'BATON: not re-read during a context re-emit.\n'
+fi
+
+# --- 2. lock -----------------------------------------------------------
 stage lock
 subsection "LOCK"
 LOCK_OUT=$("$SCRIPT_DIR/fm-lock.sh" 2>&1)
@@ -654,6 +666,8 @@ if [ "$READ_ONLY" -eq 0 ]; then
   # session-start result. A context re-emit is not another session start.
   if [ "$REEMIT" -eq 0 ]; then
     "$SCRIPT_DIR/fm-home-summary-refresh.sh" --best-effort || true
+    "$SCRIPT_DIR/fm-sync-memory.sh" queue-sync 2>&1 || \
+      printf 'QUEUE SYNC: UNCONFIRMED - hub ownership or reachability prevented a shared-queue write; local backlog was left unchanged.\n'
   fi
   # Every network call this session start owes is launched HERE, detached and
   # bounded, so it runs concurrently with the whole digest below instead of in
@@ -907,6 +921,21 @@ print_file_or_absent "$DATA/secondmates.md" "data/secondmates.md"
 print_file_or_absent "$DATA/captain.md" "data/captain.md"
 print_file_or_absent "$DATA/captain-shared.md" "data/captain-shared.md (shared, main-authoritative, read-only in secondmate homes)"
 print_file_or_absent "$DATA/learnings.md" "data/learnings.md"
+
+if [ "$REEMIT" -eq 0 ]; then
+  BATON_SUMMARY=$(awk '
+    /^[-*][[:space:]]+\[[ xX]\][[:space:]]+/ {
+      line=$0
+      sub(/^[-*][[:space:]]+\[[ xX]\][[:space:]]+/, "", line)
+      if (shown++) text=text "; "
+      text=text line
+      if (shown == 2) exit
+    }
+    END { if (text == "") text="no open backlog item recorded"; print text }
+  ' "$DATA/backlog.md" 2>/dev/null || printf 'no open backlog item recorded')
+  "$SCRIPT_DIR/fm-sync-memory.sh" baton-stamp "$BATON_SUMMARY" 2>&1 || \
+    printf 'BATON: UNCONFIRMED - hub unavailable or unsafe; the prior baton was preserved.\n'
+fi
 
 # --- 9. closing reminder -----------------------------------------------
 stage next-step

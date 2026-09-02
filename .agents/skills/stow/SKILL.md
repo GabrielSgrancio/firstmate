@@ -272,6 +272,13 @@ It is never a claim that the home's durable records are correct, because this pa
 Do not hide an over-budget result behind a reset-safe claim.
 In a primary home the receipt is written after the cascade below, not instead of it.
 
+## Fleet session baton
+
+After the complete `/stow` pass and its receipt, stamp the configured fleet-memory hub with `bin/fm-sync-memory.sh baton-stamp "<short open-work summary>"`.
+Use the captain's own nouns for the open work, including its next meaningful step, so the next machine can open with continuity rather than a generic status request.
+If the hub is unavailable or its safety checks refuse the write, report that exact unconfirmed condition and keep the local memory and queue unchanged.
+Do not retry by copying files around the helper, because the hub Git commit is the recovery boundary.
+
 ## Automatic cascade to secondmates
 
 In a primary home, every `/stow` cascades to every registered secondmate after this home's own required pass and knowledge sweep are complete.

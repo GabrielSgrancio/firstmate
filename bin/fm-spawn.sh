@@ -409,6 +409,17 @@ else
   fi
 fi
 
+# Machine profiles constrain autonomous authority only. They do not alter the
+# selected harness, runtime, project, or delivery mode. A corporate work Mac
+# may still perform every operation when the captain has just asked for it, but
+# project-editing ship/scout work must carry that current instruction explicitly.
+if [ "$RELAUNCH" -eq 0 ] && { [ "$KIND" = ship ] || [ "$KIND" = scout ]; } \
+  && "$SCRIPT_DIR/fm-machine-profile.sh" requires-captain project-edit \
+  && [ "${FM_MACHINE_CAPTAIN_APPROVED:-}" != 1 ]; then
+  echo 'REFUSED: this machine profile requires a current captain instruction before a project edit; set FM_MACHINE_CAPTAIN_APPROVED=1 only for that instructed dispatch.' >&2
+  exit 1
+fi
+
 spawn_remote_secondmate() {
   local id=$1 remote host root home harness positional model effort backend out rc meta tmp
   local remote_backend remote_target remote_harness remote_herdr_session registry_lock remote_lock remote_generation

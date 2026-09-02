@@ -81,6 +81,11 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 # shellcheck source=bin/fm-lease-lib.sh
 . "$SCRIPT_DIR/fm-lease-lib.sh"
 fm_lease_forbid_branch "PR merge (fm-pr-merge)"
+if "$SCRIPT_DIR/fm-machine-profile.sh" requires-captain merge \
+  && [ "${FM_MACHINE_CAPTAIN_APPROVED:-}" != 1 ]; then
+  echo 'REFUSED: this machine profile requires a current captain instruction before a merge; set FM_MACHINE_CAPTAIN_APPROVED=1 only for that instructed action.' >&2
+  exit 1
+fi
 
 if [ "$#" -lt 2 ]; then
   echo "error: invalid PR merge request" >&2

@@ -196,6 +196,25 @@ Before changing it, inspect the current file and curate the matching bullet in p
 Shared captain preferences that apply across secondmate domains live only in the primary home's optional `data/captain-shared.md`.
 `secondmate-provisioning` owns its propagation contract, including the required header, read-only secondmate copies, quarantine diagnostics, and the rollout rule that existing homes trim `data/captain.md` by hand after first propagation rather than deleting private content automatically.
 
+## Machine profile and fleet continuity
+
+`config/machine-profile` optionally contains one lowercase machine name such as `work-mac`.
+It is an authority label, never a capability or delivery-mode selector: all installed tools, projects, clones, harnesses, and runtime backends remain available.
+The `work-mac` profile requires a current captain instruction before Firstmate dispatches a project-editing worker, pushes remotely, or merges, while every other configured policy remains unchanged.
+The session-start digest prints the resolved profile and its authority boundary.
+For an instructed action on that profile, the invoking Firstmate process sets `FM_MACHINE_CAPTAIN_APPROVED=1` for that one command only.
+
+`config/fleet-memory-host` and optional `config/fleet-memory-dir` select the Git-backed fleet-memory hub for `bin/fm-sync-memory.sh`.
+The helper synchronizes only `learnings.md` and `captain-shared.md` by default, with equal-or-absent checks that refuse diverged content before any replacement.
+`data/captain.md`, `data/projects.md`, and generic backlog copying remain local because their contents are machine-specific or unsafe under last-writer-wins sync.
+The dedicated `queue-sync` path claims the hub's queue owner marker before it reads or writes `backlog.md`, and a second owner refuses rather than overwrite it.
+The hub must be a Git repository because every accepted write, including a session baton, is committed there.
+`session-baton.md` records the last machine, UTC stamp, and bounded open-work summary, so the next full session start can state the captain's prior context.
+An unreachable hub is reported as unconfirmed and leaves every local memory and backlog file untouched.
+
+`tasks-axi` currently exposes no environment field in its `add`, `update`, `show`, or `list` help.
+Use `bin/fm-task-environment.sh add <work|personal|fleet> ...` to append a validated `[environment: ...]` title annotation to the authoritative backlog row, where it remains visible in normal task listings and travels with the shared queue.
+
 ## Operational learnings (data/learnings.md)
 
 Fleet-local operational facts and gotchas live locally in `data/learnings.md`; it is gitignored and printed after the captain-preference files in the session-start context digest.
