@@ -44,7 +44,7 @@ if [ -z "$REMOTE_DIR" ]; then
   fi
 fi
 if [ -z "$REMOTE_DIR" ]; then
-  REMOTE_DIR="$HOME/firstmate-fleet-memory"
+  REMOTE_DIR="~/firstmate-fleet-memory"
 fi
 
 FILES=("captain.md" "learnings.md" "backlog.md" "projects.md")
