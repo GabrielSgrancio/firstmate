@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# fm-sync-memory.sh: synchronize Firstmate fleet memory (captain.md,
-# learnings.md, backlog.md, projects.md) across homes (Mac, PC, Cloud Hub)
-# via Tailscale and the central Oracle hub.
+# fm-sync-memory.sh: synchronize the SHARED layer of Firstmate fleet memory
+# across homes (Mac, PC, Cloud Hub) via Tailscale and the central Oracle hub.
+# Shared travels; per-machine files stay put. See the layering note beside
+# SHARED_FILES below for which is which and why.
 #
 # Usage:
 #   fm-sync-memory.sh status     Check sync status between local and remote hub
@@ -47,7 +48,32 @@ if [ -z "$REMOTE_DIR" ]; then
   REMOTE_DIR="~/firstmate-fleet-memory"
 fi
 
-FILES=("captain.md" "learnings.md" "backlog.md" "projects.md")
+# Fleet memory is layered, because these files answer different questions.
+#
+# SHARED travels between homes: knowledge and captain preferences that are true
+# on every machine.
+#   learnings.md        what the fleet has learned; machine-independent.
+#   captain-shared.md   preferences that hold everywhere. AGENTS.md section 2
+#                       owns it; each home keeps its own captain.md beside it.
+#
+# LOCAL never travels, because copying it would make the file lie or lose work:
+#   captain.md   machine-specific preferences (a corporate-managed laptop and a
+#                personal PC do not carry the same standing authority).
+#   projects.md  what is cloned on THIS disk and where; clone paths differ per
+#                machine, and a registry that misreports them breaks dispatch.
+#   backlog.md   this home's own work queue. Sync is last-writer-wins, so
+#                copying it between two live homes silently drops tasks.
+#
+# Overriding SHARED is deliberate and rare; set FM_MEMORY_FILES to a
+# space-separated list to sync exactly those names instead.
+SHARED_FILES=("learnings.md" "captain-shared.md")
+LOCAL_FILES=("captain.md" "projects.md" "backlog.md")
+
+if [ -n "${FM_MEMORY_FILES:-}" ]; then
+  read -r -a FILES <<< "$FM_MEMORY_FILES"
+else
+  FILES=("${SHARED_FILES[@]}")
+fi
 
 is_local() {
   [ "$REMOTE_HOST" = "local" ] || [ "$REMOTE_HOST" = "localhost" ]
@@ -83,6 +109,7 @@ do_status() {
   fi
   echo "Status: ONLINE"
   echo ""
+  printf "Not synced (per-machine): %s\n\n" "${LOCAL_FILES[*]}"
   printf "%-16s | %-12s | %-12s | %s\n" "File" "Local Size" "Remote Size" "Sync State"
   printf "%s\n" "-----------------+--------------+--------------+----------------"
 
