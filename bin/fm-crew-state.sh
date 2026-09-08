@@ -15,7 +15,7 @@
 # fixed mapping logic, no heuristics and no LLM. Output is one stable, parseable,
 # token-tight line firstmate can read every heartbeat:
 #
-#   state: <working|parked|done|blocked|paused|failed|unknown> · source: <run-step|pane|status-log|remote-endpoint|none> · <detail>
+#   state: <working|parked|done|blocked|paused|failed|unknown> · source: <run-step|pane|status-log|remote-endpoint|acp|none> · <detail>
 #
 # Logic, in order:
 #   1. Resolve worktree + backend target + kind from state/<id>.meta. A meta
@@ -84,6 +84,13 @@
 #      unreachable, and an alive endpoint whose scrollback read failed is still
 #      classified by step 4. Backends with no classifier keep reading a failed
 #      capture as gone. The fallback's own comment owns the per-verdict rules.
+#   6. transport=acp (meta): after a recorded backend target exists, ACPX's own
+#      status supplies the lifecycle fact directly, independent of the pane -
+#      but only as a no-run fallback, since step 2's run-step stays
+#      authoritative when a run is attributed. running -> working; alive/idle
+#      folds in the status log's mapped state when present, else unknown;
+#      dead or an unreadable ACPX status -> unknown. A missing session_id also
+#      reads unknown rather than probing ACPX with an empty selector.
 #
 # Read-only and side-effect free. Always exits 0 on a successful read regardless
 # of state; exit 2 only on a usage error (no id).
@@ -141,6 +148,8 @@ meta_value() {  # <key>
 WT=$(meta_value worktree)
 KIND=$(meta_value kind)
 HARNESS=$(meta_value harness)
+TRANSPORT=$(meta_value transport)
+SESSION_ID=$(meta_value session_id)
 REMOTE_HOST=$(meta_value remote_host)
 [ -n "$KIND" ] || KIND=ship
 
@@ -755,6 +764,26 @@ fi
 # verdict reports unknown rather than trusting a possibly-stale status log as
 # the current state.
 [ -n "$BACKEND_TARGET" ] || emit unknown none "no backend target recorded"
+
+# ACPX supplies the lifecycle fact directly, independent of the pane transport.
+# The no-mistakes run remains authoritative above; this is its no-run fallback.
+if [ "$TRANSPORT" = acp ]; then
+  [ -n "$SESSION_ID" ] || emit unknown acp "ACP transport has no session_id"
+  ACP_STATUS=$("$SCRIPT_DIR/fm-acp-client.sh" status "$HARNESS" "$WT" "$SESSION_ID" 2>/dev/null || true)
+  case "$(printf '%s\n' "$ACP_STATUS" | sed -n 's/.*"status":"\([^"]*\)".*/\1/p' | tail -1)" in
+    running) emit working acp "ACP session $SESSION_ID running" ;;
+    alive|idle)
+      if [ -n "$LOG_VERB" ]; then
+        LOG_STATE=$(map_log_state "$LOG_LINE")
+        [ "$LOG_STATE" = unknown ] || emit "$LOG_STATE" status-log "$(status_line_note "$LOG_LINE")${SEP}ACP session $SESSION_ID idle"
+      fi
+      emit unknown acp "ACP session $SESSION_ID idle"
+      ;;
+    dead) emit unknown acp "ACP session $SESSION_ID dead" ;;
+    *) emit unknown acp "ACP session state unavailable" ;;
+  esac
+fi
+
 if ! pane_readable "$BACKEND_TARGET"; then
   # A failed probe is not itself evidence the pane is gone: the herdr CLI can
   # error or stall under load, and tmux can fail to be executed at all (a

@@ -96,8 +96,59 @@ FM_TEST_OWNER_IDENTITY=$(fm_test_pid_identity "$$") || {
   return 1
 }
 
+# --- process-event runner reaping -------------------------------------------
+#
+# A process-event runner is detached into its own process group and reparents to
+# init, so removing a fixture directory does not stop one: only sweeping the home
+# that owns it does. Registration goes through a `$$`-keyed registry file for the
+# same reason the temp roots do - a fixture home is almost always built inside a
+# command substitution (`home=$(make_home x)`), and an array append there never
+# reaches the caller, so a suite that tracked its homes in a shell array was
+# silently tracking nothing and left every runner it started behind.
+#
+# The sweep is scoped to the exact home (and its claim root when the suite uses a
+# private one). It never matches on a script or process name, which would reach
+# into another home's live runners.
+
+FM_TEST_PROCEVENT_REGISTRY=$(mktemp "${TMPDIR:-/tmp}/.fm-test-procevent.$$.XXXXXX") || return 1
+
+fm_test_track_procevent_home() {  # <home> [claim-root]
+  [ -n "${1:-}" ] || return 1
+  printf '%s\t%s\n' "$1" "${2-}" >> "$FM_TEST_PROCEVENT_REGISTRY"
+}
+
+fm_test_reap_procevent_homes() {
+  local home claim_root seen=$'\n'
+  [ -f "$FM_TEST_PROCEVENT_REGISTRY" ] || return 0
+  while IFS=$'\t' read -r home claim_root; do
+    [ -n "$home" ] || continue
+    case "$seen" in *$'\n'"$home"$'\n'*) continue ;; esac
+    seen+="$home"$'\n'
+    [ -d "$home/state/procevent" ] || continue
+    if [ -n "$claim_root" ]; then
+      FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_PROCEVENT_CLAIM_ROOT="$claim_root" \
+        "$ROOT/bin/fm-procevent.sh" sweep-home >/dev/null 2>&1 || true
+    else
+      FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" \
+        "$ROOT/bin/fm-procevent.sh" sweep-home >/dev/null 2>&1 || true
+    fi
+  done < "$FM_TEST_PROCEVENT_REGISTRY"
+  rm -f "$FM_TEST_PROCEVENT_REGISTRY"
+}
+
+# Ceiling on how long a fixture's blocking stub may keep polling. A stub that
+# waits for a trigger file by re-running `sleep` is a high-frequency source of
+# process spawns, and one that outlives its test - because the test was killed
+# before any cleanup ran - is what turned leftover fixtures into a host-wide
+# process storm. Every blocking stub this suite writes stops itself at this
+# bound, so an escaped one is bounded in duration and cost on its own, before
+# its owner's guard reaps it.
+FM_TEST_STUB_MAX_BLOCK_SECONDS=${FM_TEST_STUB_MAX_BLOCK_SECONDS:-120}
+export FM_TEST_STUB_MAX_BLOCK_SECONDS
+
 fm_test_cleanup() {
   local d
+  fm_test_reap_procevent_homes
   for d in "${FM_TEST_CLEANUP_DIRS[@]:-}"; do
     [ -n "$d" ] && rm -rf "$d"
   done
@@ -126,6 +177,8 @@ fm_test_tmproot() {
 trap fm_test_cleanup EXIT
 trap 'fm_test_cleanup; exit 130' INT
 trap 'fm_test_cleanup; exit 143' TERM
+trap 'fm_test_cleanup; exit 129' HUP
+trap 'fm_test_cleanup; exit 131' QUIT
 
 # fm_test_reap_orphans: best-effort sweep for fixture roots left behind by a
 # prior run that was killed hard enough to skip the traps above (e.g. a
@@ -461,4 +514,44 @@ assert_absent() {
 # assert_present <path> <msg>: path must exist.
 assert_present() {
   [ -e "$1" ] || fail "$2"
+}
+
+# fm_test_base_path_sans <base_path> <tool...>: returns the path to a single
+# curated directory that resolves every tool <base_path> would have resolved,
+# except the named ones. Some hosts have real system binaries (node, orca,
+# ...) sitting in BASE_PATH; a fixture that simulates a tool as missing by
+# omitting it from fakebin still falls through to that host binary via
+# BASE_PATH, silently defeating the simulation. Dropping whole directories
+# out of BASE_PATH is not a safe fix: on a usr-merged host /bin, /sbin, and
+# /usr/sbin are symlinks that collapse to the same directory as /usr/bin, so
+# dropping any one of them because it resolves the excluded tool drops every
+# other tool a test still needs (git, awk, sed, ...) too. Building a curated
+# directory instead hides only the named tool(s). Use only at the specific
+# assertions that simulate a tool as absent - every other case keeps using
+# bare BASE_PATH.
+fm_test_base_path_sans() {
+  local base_path=$1 dir src entry name tool skip
+  shift
+  local tools=("$@")
+  dir=$(fm_test_tmproot fm-base-path-sans) || return 1
+  local dirs
+  IFS=: read -ra dirs <<< "$base_path"
+  for src in "${dirs[@]}"; do
+    [ -d "$src" ] || continue
+    for entry in "$src"/*; do
+      [ -e "$entry" ] || [ -L "$entry" ] || continue
+      name=${entry##*/}
+      [ -e "$dir/$name" ] && continue
+      skip=0
+      for tool in "${tools[@]}"; do
+        if [ "$name" = "$tool" ]; then
+          skip=1
+          break
+        fi
+      done
+      [ "$skip" -eq 1 ] && continue
+      ln -s "$entry" "$dir/$name" 2>/dev/null || true
+    done
+  done
+  printf '%s\n' "$dir"
 }

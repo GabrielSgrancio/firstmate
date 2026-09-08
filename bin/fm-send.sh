@@ -9,7 +9,11 @@
 #   worse than a loud failure.
 # Special keys instead of text: fm-send.sh <target> --key Enter
 # Key support is backend-specific: tmux/herdr support Escape, Enter, and C-c;
-# Orca currently supports Enter and C-c only, and rejects Escape.
+# Orca currently supports Enter and C-c only, and rejects Escape. A task
+# recorded with transport=acp (bin/fm-acp-client.sh) overrides all of that:
+# it has only hard cancellation, so Escape and C-c send ACP session/cancel
+# and every other key is refused; ordinary text still queues as a follow-up
+# turn through fm-acp-client.sh send instead of the inbox.
 #
 # Two data planes:
 #
@@ -702,7 +706,18 @@ if [ "${1:-}" = "--key" ]; then
   esac
   key=$2
   semantic_key=$(fm_send_normalize_key "$key")
-  if [ "$TARGET_BACKEND" = remote ]; then
+  if [ "$(fm_meta_get "$TARGET_META" transport)" = acp ]; then
+    case "$semantic_key" in
+      Escape|C-c)
+        "$SCRIPT_DIR/fm-acp-client.sh" cancel "$(fm_meta_get "$TARGET_META" harness)" \
+          "$(fm_meta_get "$TARGET_META" worktree)" "$(fm_meta_get "$TARGET_META" session_id)" || {
+            echo "error: ACP cancel was not sent to $T" >&2
+            exit 1
+          }
+        ;;
+      *) echo "error: ACP transport supports only hard cancel (Escape or C-c), not key '$key'" >&2; exit 1 ;;
+    esac
+  elif [ "$TARGET_BACKEND" = remote ]; then
     FM_SEND_REMOTE_BUDGET=${FM_SEND_REMOTE_BUDGET:-30}
     case "$FM_SEND_REMOTE_BUDGET" in
       ''|*[!0-9]*|0)
@@ -723,6 +738,14 @@ if [ "${1:-}" = "--key" ]; then
   fm_send_record_interrupt "$semantic_key" || exit 1
 else
   MESSAGE=$*
+  if [ -n "$TARGET_META" ] && [ "$(fm_meta_get "$TARGET_META" transport)" = acp ]; then
+    "$SCRIPT_DIR/fm-acp-client.sh" send "$(fm_meta_get "$TARGET_META" harness)" \
+      "$(fm_meta_get "$TARGET_META" worktree)" "$(fm_meta_get "$TARGET_META" session_id)" "$MESSAGE" || {
+        echo "error: ACP steer was not sent to $T" >&2
+        exit 1
+      }
+    exit 0
+  fi
   if [ "$TARGET_BACKEND" = remote ]; then
     FM_SEND_REMOTE_BUDGET=${FM_SEND_REMOTE_BUDGET:-30}
     case "$FM_SEND_REMOTE_BUDGET" in
