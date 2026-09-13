@@ -9,6 +9,8 @@ firstmate's supervisor contract and routing index for conditional procedures is 
 ## Event-driven supervision
 
 A zero-token bash watcher (`bin/fm-watch.sh`) sleeps on the fleet, classifies detected wakes in bash, and wakes the first mate only when something is actionable.
+The optional `systemd --user` supervisor-continuity service is the outer lifecycle boundary for a primary supervisor: it keeps the watcher in a separate session, validates a durable supervisor lease, and routes one replacement through the configured dispatch hook when that lease is lost.
+[`SUPERVISOR_CONTINUITY_DESIGN.md`](SUPERVISOR_CONTINUITY_DESIGN.md) owns the primitive decision and its evidence.
 Actionable wakes include captain-relevant status signals, no-verb signals without positive evidence that their crew is still executing, authenticated check output such as PR merge polling or a Relay mention, stale panes whose crew is not provably working whether their status log looks terminal or non-terminal, provably-working stale panes that persist past `FM_STALE_ESCALATE_SECS` without their own task worktree being written, declared external waits and verified captain-held transfers that remain declared past `FM_PAUSE_RESURFACE_SECS`, and heartbeat backstop hits.
 For an ordinary crew task, a wait is read from both of its records: the status line a worker declared, and the backlog hold `bin/fm-captain-hold.sh` recorded once firstmate handed the work to the captain.
 So a delivered ordinary crew task whose last line stays `done: PR ...` bounds repeated alarms from new pane hashes to the `FM_PAUSE_RESURFACE_SECS` cadence for the length of the captain's decision.

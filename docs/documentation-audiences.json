@@ -381,6 +381,14 @@
       "audience": "operator-current"
     },
     {
+      "path": "docs/SUPERVISOR_CONTINUITY_DESIGN.md",
+      "audience": "maintainer-architecture"
+    },
+    {
+      "path": "docs/SUPERVISOR_FAILOVER_ACCEPTANCE.md",
+      "audience": "maintainer-verification"
+    },
+    {
       "path": "docs/sessionstart-nudge.md",
       "audience": "operator-current"
     },
