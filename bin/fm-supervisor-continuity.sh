@@ -189,8 +189,7 @@ failover_once() {
   FM_HOME="$FM_HOME" FM_DATA_OVERRIDE="$DATA" FM_STATE_OVERRIDE="$STATE" \
     "$MISSION" session-start "$mission_id" --harness "$new_harness" --session-id "$session_id" >/dev/null || return 1
   now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-  env FM_HOME="$FM_HOME" FM_ROOT_OVERRIDE="$FM_ROOT" FM_MISSION_ID="$mission_id" \
-    FM_MISSION_CAPSULE="$capsule" FM_SUPERVISOR_SESSION_ID="$session_id" \
+  env FM_HOME="$FM_HOME" FM_ROOT_OVERRIDE="$FM_ROOT" FM_SUPERVISOR_SESSION_ID="$session_id" \
     setsid "$command" </dev/null >>"$STATE/.supervisor-replacement.log" 2>&1 &
   pid=$!
   identity=$(pid_identity "$pid") || return 1

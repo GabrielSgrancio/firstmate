@@ -277,11 +277,23 @@
       "audience": "public-product"
     },
     {
+      "path": "data/supervisor-rehydration-e2e/report.md",
+      "audience": "maintainer-verification"
+    },
+    {
+      "path": "docs/SUPERVISOR_REHYDRATION_CONTRACT.md",
+      "audience": "maintainer-architecture"
+    },
+    {
       "path": "docs/agent-control.md",
       "audience": "maintainer-architecture"
     },
     {
       "path": "docs/architecture.md",
+      "audience": "maintainer-architecture"
+    },
+    {
+      "path": "docs/FIRSTMATE_OPERATIONAL_STATE_ADR.md",
       "audience": "maintainer-architecture"
     },
     {
@@ -398,6 +410,10 @@
     },
     {
       "path": "docs/SUPERVISOR_FAILOVER_ACCEPTANCE.md",
+      "audience": "maintainer-verification"
+    },
+    {
+      "path": "docs/SUPERVISOR_REHYDRATION_E2E.md",
       "audience": "maintainer-verification"
     },
     {

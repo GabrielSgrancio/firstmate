@@ -1,6 +1,6 @@
 # ADR: FirstMate operational-state storage model
 
-- Status: Implemented (event store and materializer; supervisor bootstrap remains deferred)
+- Status: Implemented (event store, materializer, and supervisor resume-context bootstrap)
 - Date: 2026-09-13
 - Authors: crewmate `reconciliation-operational-state-architecture` (scout), for captain review
 - Format note: this repo has no `docs/adr/` directory and no prior ADR was
@@ -233,7 +233,7 @@ The supported checkpoint types are `mission_created`, `session_started`,
 `session_ended`, `task_dispatched`, `task_blocked`, `task_completed`,
 `captain_hold_created`, `captain_hold_resolved`, `worktree_created`,
 `commit_produced`, `delivery_state_changed`, `phase_transition`,
-`supervisor_handoff`, and `supervisor_termination`.
+`supervisor_handoff`, `supervisor_termination`, and `reconciliation_correction`.
 `delivery_state_changed` requires `EXECUTION_DONE`, `DELIVERY_READY`, `LANDED`,
 or `VERIFIED_LANDED` and carries `task_id` plus evidence.
 Task events reference `state/<task-id>.meta` by `task_id`; they never copy that

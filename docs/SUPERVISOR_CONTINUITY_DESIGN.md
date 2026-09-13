@@ -12,6 +12,9 @@ The service is the outer lifecycle owner, while the script owns only bounded det
 
 The replacement is launched through the configured FirstMate replacement command and is recorded with the same mission identifier before the command is started.
 
+The replacement command receives the FirstMate home and a session identifier, but not mission identity or capsule environment variables.
+It must discover active missions through `bin/fm-mission.sh active` and load the selected context through `bin/fm-mission.sh resume-context`.
+
 The service unit uses `Restart=always`, so a continuity process crash is repaired by systemd without a supervisor turn.
 
 On hosts without a usable `systemd --user` manager, installation is refused rather than silently degrading to a child process or an unowned shell loop.

@@ -90,7 +90,8 @@ test("supervisor continuity survives supervisor and service process loss", async
     "#!/usr/bin/env bash",
     "set -u",
     "printf '%s\\n' \"$$\" > \"$FM_HOME/state/replacement.pid\"",
-    "\"$FM_ROOT_OVERRIDE/bin/fm-supervisor-continuity.sh\" record-supervisor \"$FM_MISSION_ID\" \"$$\" claude \"$FM_SUPERVISOR_SESSION_ID\"",
+    "mission_id=$(FM_HOME=\"$FM_HOME\" FM_ROOT_OVERRIDE=\"$FM_ROOT_OVERRIDE\" \"$FM_ROOT_OVERRIDE/bin/fm-mission.sh\" active | head -1)",
+    "\"$FM_ROOT_OVERRIDE/bin/fm-supervisor-continuity.sh\" record-supervisor \"$mission_id\" \"$$\" claude \"$FM_SUPERVISOR_SESSION_ID\"",
     "sleep 30",
     "",
   ].join("\n"));

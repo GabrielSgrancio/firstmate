@@ -4,8 +4,9 @@ Companion to `docs/FIRSTMATE_OPERATIONAL_STATE_CURRENT.md` and
 `docs/FIRSTMATE_OPERATIONAL_STATE_OPTIONS.md`/`_ADR.md`. This document designs
 the intended SessionStart/supervisor-rehydration sequence and the checkpoint
 policy that feeds it.
-The event-log and materializer implementation is owned by `bin/fm-mission.sh`;
-the bootstrap sequence below remains a separate future phase.
+The event-log, materializer, and bootstrap implementation are owned by
+`bin/fm-mission.sh`; `resume-context` is the concrete command for this
+sequence.
 
 ## Design goals, restated from the brief
 
@@ -28,9 +29,7 @@ the bootstrap sequence below remains a separate future phase.
 6. Continue from the exact next action
 ```
 
-Each step below states what exists today (per the current-state inventory),
-what's missing, and the minimal new surface this design proposes — again,
-as a contract to build against later, not as code delivered now.
+Each step below states the current implementation and its remaining boundary.
 
 ### Step 1 — Load Captain identity (OpenClaw)
 
@@ -49,10 +48,9 @@ captain, not a strict pipeline where one blocks the other.
 
 ### Step 2 — Query active FirstMate mission(s)
 
-Today: `state/.active-mission` is a bare pointer file with no reader on
-`main` (current-state §2a). This design proposes a single new read-only
-query, `fm mission active` (naming illustrative, not prescriptive per the
-brief's own caveat against assuming the exact command shape), that:
+Today: `bin/fm-mission.sh active` materializes and reads every mission event
+log, returning each active mission id.
+It is the concrete equivalent of `fm mission active` and:
 
 - Returns zero, one, or many active mission ids. **Zero or many must both be
   legal answers**, not error cases — the live host tonight has three mission
@@ -66,11 +64,9 @@ brief's own caveat against assuming the exact command shape), that:
 
 ### Step 3 — Load durable mission/resume state
 
-Today: three incompatible ad hoc schemas (current-state §2a/§2b/§2c), none
-committed/read on `main`. Per the ADR, this becomes: for each active mission
-id from step 2, read its materialized view (derived from that mission's
-event log, per the ADR's `ADAPT_TO_EVENT_STORE` verdict). The materialized
-view's shape should answer, at minimum:
+Today: `bin/fm-mission.sh resume-context <mission-id>` materializes the view
+derived from that mission's event log and renders the durable fields below.
+The materialized view answers, at minimum:
 
 - `intent` and a pointer to the original captain prompt (see Checkpoint
   Policy below for how that pointer must be preserved).
@@ -141,10 +137,9 @@ conventions rather than inventing a new verbose format.
 
 ### Step 6 — Continue from the exact next action
 
-Today: §2a's `recommended_next_step` field proves this is already a valued
-output (a free-text pointer into the pending backlog), but it is currently
-synthesized ad hoc with no visible derivation rule. This design proposes it
-be a **derived** field, not free text: the highest-priority backlog task
+Today: the stored `next_action` is rendered by `resume-context` as the
+immediate continuation pointer.
+The intended future refinement remains a **derived** field: the highest-priority backlog task
 among this mission's PLAN section with no unresolved blocking dependency and
 no open captain hold, using the same dependency/time-gate logic
 `AGENTS.md` §10 already specifies for backlog re-evaluation ("dispatching

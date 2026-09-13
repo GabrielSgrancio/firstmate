@@ -15,6 +15,7 @@
 #   fm-mission.sh show <mission-id>
 #   fm-mission.sh capsule <mission-id> [--next <action>]
 #   fm-mission.sh active
+#   fm-mission.sh resume-context <mission-id>
 #
 # FM_HOME selects the private home; FM_DATA_OVERRIDE and FM_STATE_OVERRIDE are
 # accepted for isolated tests and alternate home layouts.
@@ -65,18 +66,19 @@ acquire_mission_lock() {
 }
 
 run_store() {
-  python3 - "$MISSIONS_DIR" "$STATE_DIR" "$@" <<'PY'
+  python3 - "$MISSIONS_DIR" "$STATE_DIR" "$SCRIPT_DIR" "$@" <<'PY'
 import copy
 import hashlib
 import json
 import os
 import re
+import subprocess
 import sys
 import tempfile
 from datetime import datetime, timezone
 
-missions_dir, state_dir, operation = sys.argv[1:4]
-args = sys.argv[4:]
+missions_dir, state_dir, script_dir, operation = sys.argv[1:5]
+args = sys.argv[5:]
 EVENT_SCHEMA_VERSION = 1
 VIEW_SCHEMA_VERSION = 3
 VALID_DELIVERY_STATES = {"EXECUTION_DONE", "DELIVERY_READY", "LANDED", "VERIFIED_LANDED"}
@@ -85,7 +87,7 @@ VALID_TYPES = {
     "task_blocked", "task_completed", "captain_hold_created",
     "captain_hold_resolved", "worktree_created", "commit_produced",
     "delivery_state_changed", "phase_transition", "supervisor_handoff",
-    "supervisor_termination",
+    "supervisor_termination", "reconciliation_correction",
 }
 FORBIDDEN_META_FIELDS = {"base_sha", "target_branch"}
 ID_RE = re.compile(r"^[A-Za-z0-9._:-]+$")
@@ -253,6 +255,7 @@ def new_view(mission_id):
         "next_action": "Continue the active mission", "current_session_id": None,
         "sessions": [], "tasks": {}, "captain_holds": {}, "worktrees": [],
         "phases": [], "supervisor_handoffs": [], "supervisor_termination": None,
+        "reconciliations": [],
         "last_event": None,
     }
 
@@ -349,6 +352,14 @@ def apply_event(view, record):
     elif event_type == "supervisor_termination":
         item = copy.deepcopy(payload); item["event"] = event_ref
         view["supervisor_termination"] = item; view["status"] = "TERMINATED"
+    elif event_type == "reconciliation_correction":
+        task = task_for(view, payload)
+        correction = copy.deepcopy(payload); correction["event"] = event_ref
+        view.setdefault("reconciliations", [])
+        view["reconciliations"].append(correction)
+        if payload.get("field") == "delivery_state" and payload.get("observed") in VALID_DELIVERY_STATES:
+            task["delivery_state"] = payload["observed"]
+        task["last_event"] = event_ref
     view["updated_at"] = record["occurred_at"]
     view["last_event"] = event_ref
 
@@ -444,6 +455,156 @@ def write_capsule(view):
     atomic_write(os.path.join(state_dir, "mission-capsule.json"), text)
 
 
+def command_output(args, env, timeout=10):
+    try:
+        result = subprocess.run(args, env=env, text=True, capture_output=True, timeout=timeout, check=False)
+        return result.returncode, (result.stdout or "").strip(), (result.stderr or "").strip()
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return 1, "", str(exc)
+
+
+def parse_meta(path):
+    values = {}
+    try:
+        with open(path, encoding="utf-8") as handle:
+            for line in handle:
+                key, separator, value = line.rstrip("\n").partition("=")
+                if separator:
+                    values[key] = value
+    except OSError:
+        pass
+    return values
+
+
+def parse_crew_state(line):
+    fields = {}
+    for part in line.split(" · "):
+        key, separator, value = part.partition(": ")
+        if separator:
+            fields[key] = value
+    return fields
+
+
+def reconcile_task(task_id, task, script_dir):
+    home = os.path.dirname(state_dir)
+    env = os.environ.copy()
+    env.update({"FM_HOME": home, "FM_ROOT_OVERRIDE": os.path.dirname(script_dir),
+                "FM_DATA_OVERRIDE": os.path.dirname(missions_dir), "FM_STATE_OVERRIDE": state_dir})
+    meta = parse_meta(os.path.join(state_dir, task.get("meta_pointer", "state/" + task_id + ".meta").removeprefix("state/")))
+    worktree = meta.get("worktree") or task.get("worktree") or ""
+    repo = meta.get("project") or task.get("repo") or ""
+    live = {"state": "unknown", "source": "none", "detail": "task state unavailable"}
+    try:
+        result = subprocess.run(["bash", os.path.join(script_dir, "fm-crew-state.sh"), task_id],
+                                env=env, text=True, capture_output=True, timeout=10, check=False)
+        line = (result.stdout or "").strip().splitlines()
+        if line:
+            live.update(parse_crew_state(line[-1]))
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+
+    if task.get("delivery_state") in {"LANDED", "VERIFIED_LANDED"} and repo:
+        projects = os.path.join(home, "projects")
+        try:
+            if os.path.commonpath([os.path.realpath(repo), os.path.realpath(projects)]) == os.path.realpath(projects):
+                subprocess.run(["bash", os.path.join(script_dir, "fm-fleet-sync.sh"), repo],
+                               env=env, text=True, capture_output=True, timeout=15, check=False)
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            pass
+
+    git_info = {"exists": bool(worktree and os.path.isdir(worktree)), "path": worktree,
+                "branch": "unknown", "head": "unknown", "clean": "unknown"}
+    if git_info["exists"]:
+        for key, args in (("branch", ["git", "-C", worktree, "symbolic-ref", "--short", "HEAD"]),
+                          ("head", ["git", "-C", worktree, "rev-parse", "HEAD"])):
+            rc, out, _ = command_output(args, env)
+            if rc == 0 and out:
+                git_info[key] = out
+        rc, out, _ = command_output(["git", "-C", worktree, "status", "--porcelain"], env)
+        if rc == 0:
+            git_info["clean"] = not bool(out)
+
+    observed_delivery = task.get("delivery_state") or "UNRECORDED"
+    delivery_history = [item.get("delivery_state", "unknown") for item in task.get("delivery_history", [])]
+    if observed_delivery in {"LANDED", "VERIFIED_LANDED"} and repo:
+        evidence = task.get("delivery_history", [])[-1].get("evidence", {}) if task.get("delivery_history") else {}
+        commit = evidence.get("commit_sha") or evidence.get("merge_commit") or evidence.get("fast_forward_commit")
+        target = meta.get("target_branch")
+        if commit and target:
+            rc, _, _ = command_output(["git", "-C", repo, "merge-base", "--is-ancestor", commit, target], env)
+            if rc == 0:
+                observed_delivery = "VERIFIED_LANDED"
+    return {"meta": meta, "live": live, "git": git_info,
+            "delivery_state": observed_delivery, "delivery_history": delivery_history}
+
+
+def resume_context(mission_id, script_dir):
+    view = materialize(mission_id, emit_warning=False)
+    reconciled = {task_id: reconcile_task(task_id, task, script_dir)
+                  for task_id, task in sorted(view["tasks"].items())}
+    corrected = False
+    for task_id, item in reconciled.items():
+        stored = view["tasks"][task_id].get("delivery_state")
+        observed = item.get("delivery_state")
+        if stored != observed and observed in VALID_DELIVERY_STATES:
+            event_id = "reconcile:%s:%s" % (task_id, observed)
+            append_event(mission_id, event_id, "reconciliation_correction", {
+                "task_id": task_id, "field": "delivery_state", "stored": stored, "observed": observed,
+                "reason": "live Git verification during supervisor rehydration",
+            })
+            corrected = True
+    if corrected:
+        view = materialize(mission_id, emit_warning=False)
+        write_capsule(view)
+        reconciled = {task_id: reconcile_task(task_id, task, script_dir)
+                      for task_id, task in sorted(view["tasks"].items())}
+    print("SUPERVISOR RESUME CONTEXT")
+    print("MISSION " + mission_id)
+    print("INTENT " + str(view.get("intent") or "(missing)"))
+    prompt = view.get("original_prompt") or {}
+    print("ORIGINAL PROMPT file=%s sha256=%s source=%s step=%s classification=%s" %
+          (prompt.get("file", "(missing)"), prompt.get("sha256", "(missing)"),
+           prompt.get("source_transcript") or "(none)", prompt.get("step_index") or "(none)",
+           prompt.get("classification", "(missing)")))
+    print("TASK GRAPH " + json.dumps(view.get("task_graph", []), sort_keys=True, separators=(",", ":")))
+    phases = view.get("phases", [])
+    print("PROGRESS " + "; ".join(str(phase.get("phase", "unknown")) for phase in phases) if phases else "PROGRESS none")
+    for task_id, task in sorted(view["tasks"].items()):
+        item = reconciled[task_id]
+        git_info = item["git"]
+        meta = item["meta"]
+        print("TASK %s delivery_state=%s delivery_history=%s completed=%s blocked=%s live_state=%s live_source=%s worktree=%s branch=%s" %
+              (task_id, item["delivery_state"], ",".join(item["delivery_history"]) or "(none)",
+               str(task.get("completed", False)).lower(), str(task.get("blocked", False)).lower(),
+               item["live"].get("state", "unknown"), item["live"].get("source", "none"),
+               git_info["path"] or "(none)", git_info["branch"]))
+        print("SOURCE CONTROL %s repo=%s target_branch=%s base_sha=%s head=%s clean=%s" %
+              (task_id, meta.get("project") or task.get("repo") or "(none)",
+               meta.get("target_branch", "(none)"), meta.get("base_sha", "(none)"),
+               git_info["head"], str(git_info["clean"]).lower()))
+    holds = [hold for hold in view.get("captain_holds", {}).values() if hold.get("status") == "OPEN"]
+    if holds:
+        print("DECISIONS " + "; ".join("%s task=%s pointer=%s" %
+              (hold["hold_id"], hold["task_id"], hold.get("backlog_pointer", "(none)")) for hold in holds))
+    else:
+        print("DECISIONS none")
+    ended = [session for session in view.get("sessions", []) if session.get("status") == "ENDED"]
+    prior = ended[-1] if ended else None
+    wake_count = 0
+    try:
+        with open(os.path.join(state_dir, ".wake-queue"), encoding="utf-8") as handle:
+            wake_count = sum(1 for line in handle if any(task_id in line for task_id in view["tasks"]))
+    except OSError:
+        pass
+    if prior:
+        print("RECOVERY prior_session=%s harness=%s end_reason=%s ended_at=%s open_wakes=%s" %
+              (prior.get("session_id"), prior.get("harness"), prior.get("end_reason"), prior.get("ended_at"), wake_count))
+    else:
+        print("RECOVERY prior_session=none end_reason=none open_wakes=%s" % wake_count)
+    print("NEXT ACTION " + str(view.get("next_action") or "No unblocked next action"))
+    print("sourced from event-store materialization plus live reconciliation")
+
+
 def publish_active(mission_id):
     atomic_write(os.path.join(state_dir, ".active-mission"), mission_id + "\n")
 
@@ -522,6 +683,8 @@ def main():
             session_end(*args)
         elif operation in {"materialize", "show"}:
             require_mission_id(args[0]); print(json.dumps(materialize(args[0]), indent=2))
+        elif operation == "resume-context":
+            require_mission_id(args[0]); resume_context(args[0], script_dir)
         elif operation == "capsule":
             require_mission_id(args[0]); view = materialize(args[0])
             if len(args) > 1 and args[1]:
@@ -536,8 +699,8 @@ def main():
                     if re.fullmatch(r"[A-Za-z0-9._-]+", mission_id) and not mission_id.startswith("-") and os.path.exists(log_path(mission_id)):
                         view_file = view_path(mission_id)
                         try:
-                            view = read_json(view_file)
-                        except (OSError, ValueError, KeyError, json.JSONDecodeError):
+                            view = materialize(mission_id, emit_warning=False)
+                        except (OSError, ValueError, KeyError, json.JSONDecodeError, StoreError):
                             continue
                         if view.get("schema_version") == VIEW_SCHEMA_VERSION and view.get("status") == "ACTIVE":
                             print(mission_id)
@@ -655,7 +818,7 @@ case "${1-}" in
   append) shift; cmd_append "$@" ;;
   session-start) shift; cmd_session_start "$@" ;;
   session-end) shift; cmd_session_end "$@" ;;
-  materialize|show) cmd_read "$1" "${2-}" ;;
+  materialize|show|resume-context) cmd_read "$1" "${2-}" ;;
   capsule) shift; cmd_capsule "$@" ;;
   active) cmd_read active ;;
   ''|-h|--help|help) usage ;;
