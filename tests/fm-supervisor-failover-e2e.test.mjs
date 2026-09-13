@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync, chmodSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync, chmodSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -60,6 +60,7 @@ test("supervisor continuity survives supervisor and service process loss", async
   const data = path.join(home, "data");
   const missionId = "continuity-e2e";
   const missionDir = path.join(data, "missions", missionId);
+  cpSync(path.join(ROOT, "tests", "fixtures", "router-v2"), home, { recursive: true });
   mkdirSync(state, { recursive: true });
   mkdirSync(data, { recursive: true });
 
@@ -74,7 +75,10 @@ test("supervisor continuity survives supervisor and service process loss", async
   const env = envFor(home, {
     FM_SUPERVISOR_CONTINUITY_INTERVAL: "0.1",
     FM_SUPERVISOR_CONTINUITY_WATCHER_GRACE: "10",
-    FM_SUPERVISOR_ROUTE_COMMAND: path.join(home, "route.sh"),
+    FM_SUPERVISOR_ROUTE_COMMAND: path.join(ROOT, "bin", "fm-supervisor-route.sh"),
+    FM_SUPERVISOR_ROUTE_ROLE: "general_engineer",
+    FM_SUPERVISOR_ROUTE_DATA_CLASS: "PUBLIC",
+    FM_SUPERVISOR_USE_LIVE_QUOTA: "0",
     FM_POLL: "1",
     FM_SIGNAL_GRACE: "0",
     FM_CHECK_INTERVAL: "999999",
@@ -86,22 +90,13 @@ test("supervisor continuity survives supervisor and service process loss", async
     "#!/usr/bin/env bash",
     "set -u",
     "printf '%s\\n' \"$$\" > \"$FM_HOME/state/replacement.pid\"",
-    "\"$FM_ROOT_OVERRIDE/bin/fm-supervisor-continuity.sh\" record-supervisor \"$FM_MISSION_ID\" \"$$\" codex \"$FM_SUPERVISOR_SESSION_ID\"",
+    "\"$FM_ROOT_OVERRIDE/bin/fm-supervisor-continuity.sh\" record-supervisor \"$FM_MISSION_ID\" \"$$\" claude \"$FM_SUPERVISOR_SESSION_ID\"",
     "sleep 30",
     "",
   ].join("\n"));
   chmodSync(replacement, 0o700);
 
-  const route = path.join(home, "route.sh");
-  writeFileSync(route, [
-    "#!/usr/bin/env bash",
-    "printf 'harness=codex\\n'",
-    "printf 'command=%s\\n' \"$FM_SUPERVISOR_REPLACEMENT_COMMAND\"",
-    "",
-  ].join("\n"));
-  chmodSync(route, 0o700);
-
-  const routeEnv = { ...env, FM_SUPERVISOR_REPLACEMENT_COMMAND: replacement };
+  const routeEnv = { ...env, FM_SUPERVISOR_COMMAND_CLAUDE: replacement };
   t.after(() => {
     for (const child of [continuity, replacementProcess, supervisor]) {
       if (child && !child.killed) child.kill("SIGKILL");
@@ -114,14 +109,14 @@ test("supervisor continuity survives supervisor and service process loss", async
     "--prompt-file", prompt, "--task-graph-file", graph,
     "--next", "step-b",
   ], env);
-  run(MISSION, ["session-start", missionId, "--harness", "claude", "--session-id", "session-a"], env);
+  run(MISSION, ["session-start", missionId, "--harness", "codex", "--session-id", "session-a"], env);
 
   const supervisor = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
     cwd: ROOT,
     env: routeEnv,
     stdio: "ignore",
   });
-  run(CONTINUITY, ["record-supervisor", missionId, String(supervisor.pid), "claude", "session-a"], env);
+  run(CONTINUITY, ["record-supervisor", missionId, String(supervisor.pid), "codex", "session-a"], env);
 
   const continuity = spawn("bash", [CONTINUITY, "run"], {
     cwd: ROOT,
@@ -141,7 +136,7 @@ test("supervisor continuity survives supervisor and service process loss", async
   const replacementRecord = JSON.parse(readFileSync(path.join(state, "supervisor-continuity-replacement.json"), "utf8"));
   replacementProcess = { pid: replacementRecord.pid, killed: false, kill(signal) { process.kill(this.pid, signal); this.killed = true; } };
   assert.equal(replacementRecord.mission_id, missionId);
-  assert.equal(replacementRecord.harness, "codex");
+  assert.equal(replacementRecord.harness, "claude");
   assert.equal(replacementRecord.original_prompt_pointer, "data/missions/" + missionId + "/original-prompt.md");
   assert.deepEqual(replacementRecord.task_graph, JSON.parse(readFileSync(graph, "utf8")));
   assert.equal(replacementRecord.next_action, "step-b");
@@ -150,8 +145,10 @@ test("supervisor continuity survives supervisor and service process loss", async
 
   const mission = JSON.parse(readFileSync(path.join(missionDir, "mission.json"), "utf8"));
   assert.equal(mission.sessions[0].status, "ENDED");
-  assert.equal(mission.sessions[0].end_reason, "SUPERVISOR_FAILOVER:claude");
-  assert.equal(mission.sessions[1].harness, "codex");
+  assert.equal(mission.sessions[0].end_reason, "SUPERVISOR_FAILOVER:codex");
+  assert.equal(mission.sessions[1].harness, "claude");
+  const continuityLog = readFileSync(path.join(state, ".supervisor-continuity.log"), "utf8");
+  assert.match(continuityLog, /Router V2 excluded 6 codex RouteTargets and selected route=claude:claude-sonnet-5:medium harness=claude/);
   assert.equal(mission.sessions[1].status, "RUNNING");
 
   let watcherDiagnostic = "";

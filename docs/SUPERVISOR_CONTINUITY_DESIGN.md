@@ -56,7 +56,9 @@ Worker quota failover remains owned by the worker relaunch path and is not folde
 
 The service does not select a harness by calling a provider or Router implementation directly.
 
-It invokes the existing route-dispatch hook supplied at installation, which is responsible for consulting Router V2 and producing a concrete replacement harness and command.
+It invokes the route-dispatch hook supplied at installation, defaulting to `bin/fm-supervisor-route.sh`, which consults Router V2, excludes every RouteTarget on the dead harness, and produces a concrete replacement harness and configured executable command.
+
+The canonical hook takes its role and data class from `FM_SUPERVISOR_ROUTE_ROLE` and `FM_SUPERVISOR_ROUTE_DATA_CLASS`, and takes the selected harness command from its `FM_SUPERVISOR_COMMAND_<HARNESS>` mapping or the generic replacement-command fallback.
 
 No replacement is started when the route hook, mission capsule, lease identity, or state lock cannot be validated.
 

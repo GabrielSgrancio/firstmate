@@ -27,7 +27,16 @@ LOCK="$STATE/.supervisor-continuity.lock"
 WATCHER_PID_FILE="$STATE/.supervisor-continuity-watcher.pid"
 INTERVAL="${FM_SUPERVISOR_CONTINUITY_INTERVAL:-5}"
 WATCHER_GRACE="${FM_SUPERVISOR_CONTINUITY_WATCHER_GRACE:-300}"
-ROUTE_COMMAND="${FM_SUPERVISOR_ROUTE_COMMAND:-}"
+ROUTE_COMMAND="${FM_SUPERVISOR_ROUTE_COMMAND:-$SCRIPT_DIR/fm-supervisor-route.sh}"
+ROUTE_ROLE="${FM_SUPERVISOR_ROUTE_ROLE:-general_engineer}"
+ROUTE_DATA_CLASS="${FM_SUPERVISOR_ROUTE_DATA_CLASS:-PUBLIC}"
+ROUTE_EFFORT="${FM_SUPERVISOR_ROUTE_EFFORT:-}"
+USE_LIVE_QUOTA="${FM_SUPERVISOR_USE_LIVE_QUOTA:-1}"
+COMMAND_CODEX="${FM_SUPERVISOR_COMMAND_CODEX:-}"
+COMMAND_CLAUDE="${FM_SUPERVISOR_COMMAND_CLAUDE:-}"
+COMMAND_ANTIGRAVITY="${FM_SUPERVISOR_COMMAND_ANTIGRAVITY:-}"
+COMMAND_OPENCODE="${FM_SUPERVISOR_COMMAND_OPENCODE:-}"
+REPLACEMENT_COMMAND="${FM_SUPERVISOR_REPLACEMENT_COMMAND:-}"
 die() { printf 'error: %s\n' "$1" >&2; exit 1; }
 log() { printf '[%s] %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >>"$STATE/.supervisor-continuity.log"; }
 valid_id() { case "${1-}" in ''|*[!A-Za-z0-9._-]*) return 1 ;; esac; }
@@ -155,7 +164,7 @@ PY
 route_replacement() {
   local old_harness="$1" mission_id="$2" capsule="$3" output
   [ -n "$ROUTE_COMMAND" ] && [ -x "$ROUTE_COMMAND" ] || {
-    log "replacement route unavailable; configure FM_SUPERVISOR_ROUTE_COMMAND"
+    log "replacement route unavailable: $ROUTE_COMMAND"
     return 1
   }
   output=$("$ROUTE_COMMAND" "$old_harness" "$mission_id" "$capsule" 2>>"$STATE/.supervisor-continuity.log") || return 1
@@ -228,8 +237,10 @@ install_service() {
   mkdir -p "$unit_dir" || die 'could not create user unit directory'
   tmp=$(mktemp "$unit_dir/.continuity.XXXXXX") || die 'could not create unit temporary file'
   {
-    printf '[Unit]\nDescription=FirstMate supervisor continuity\nAfter=default.target\n\n[Service]\nType=simple\nEnvironment=FM_HOME=%s\nEnvironment=FM_ROOT_OVERRIDE=%s\nEnvironment=FM_SUPERVISOR_ROUTE_COMMAND=%s\nExecStart=%s run\nRestart=always\nRestartSec=2\nKillMode=process\n\n[Install]\nWantedBy=default.target\n' \
-      "$FM_HOME" "$FM_ROOT" "$ROUTE_COMMAND" "$SCRIPT_DIR/fm-supervisor-continuity.sh"
+    printf '[Unit]\nDescription=FirstMate supervisor continuity\nAfter=default.target\n\n[Service]\nType=simple\nEnvironment=FM_HOME=%s\nEnvironment=FM_ROOT_OVERRIDE=%s\nEnvironment=FM_SUPERVISOR_ROUTE_COMMAND=%s\nEnvironment=FM_SUPERVISOR_ROUTE_ROLE=%s\nEnvironment=FM_SUPERVISOR_ROUTE_DATA_CLASS=%s\nEnvironment=FM_SUPERVISOR_ROUTE_EFFORT=%s\nEnvironment=FM_SUPERVISOR_USE_LIVE_QUOTA=%s\nEnvironment=FM_SUPERVISOR_COMMAND_CODEX=%s\nEnvironment=FM_SUPERVISOR_COMMAND_CLAUDE=%s\nEnvironment=FM_SUPERVISOR_COMMAND_ANTIGRAVITY=%s\nEnvironment=FM_SUPERVISOR_COMMAND_OPENCODE=%s\nEnvironment=FM_SUPERVISOR_REPLACEMENT_COMMAND=%s\nExecStart=%s run\nRestart=always\nRestartSec=2\nKillMode=process\n\n[Install]\nWantedBy=default.target\n' \
+      "$FM_HOME" "$FM_ROOT" "$ROUTE_COMMAND" "$ROUTE_ROLE" "$ROUTE_DATA_CLASS" "$ROUTE_EFFORT" "$USE_LIVE_QUOTA" \
+      "$COMMAND_CODEX" "$COMMAND_CLAUDE" "$COMMAND_ANTIGRAVITY" "$COMMAND_OPENCODE" "$REPLACEMENT_COMMAND" \
+      "$SCRIPT_DIR/fm-supervisor-continuity.sh"
   } >"$tmp"
   if ! chmod 600 "$tmp" || ! mv -f -- "$tmp" "$unit"; then die 'could not publish user unit'; fi
   systemctl --user daemon-reload || die 'systemd user daemon reload failed'
