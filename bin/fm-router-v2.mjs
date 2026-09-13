@@ -598,6 +598,9 @@ export function dispatchThroughHerdr({
   }
   spawnArgs.push('--harness', selectedRoute.harness);
   spawnArgs.push('--model', selectedRoute.resolved_runtime_model);
+  spawnArgs.push('--role', role);
+  spawnArgs.push('--data-class', dataClass);
+  spawnArgs.push('--route-id', selectedRoute.route_id);
   if (selectedRoute.reasoning_effort) {
     const effort = selectedRoute.reasoning_effort === 'ultra' ? 'max' : selectedRoute.reasoning_effort;
     if (['low', 'medium', 'high', 'xhigh', 'max'].includes(effort)) {

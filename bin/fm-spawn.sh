@@ -48,6 +48,9 @@
 #   axes chosen by firstmate at intake. They are only threaded into harnesses whose
 #   installed CLIs were verified to support that axis; unsupported axes are omitted
 #   from that harness's launch rather than guessed.
+#   --role and --data-class are optional canonical Router V2 provenance fields
+#   for a fresh routed worker dispatch. --route-id records the selected
+#   RouteTarget. Relaunch preserves these fields from the existing task record.
 #   --backend <name> is the explicit runtime session-provider backend for this
 #   exact task only (docs/configuration.md "Runtime backend" owns when that flag
 #   is authorized). Without it, the script resolves FM_BACKEND, then
@@ -448,6 +451,9 @@ KIND_SET=0
 HARNESS_ARG=
 MODEL=
 EFFORT=
+ROLE=
+DATA_CLASS=
+ROUTE_ID=
 BACKEND_ARG=
 MODE=
 YOLO=
@@ -455,6 +461,9 @@ TRACEPARENT_ARG=
 HARNESS_SET=0
 MODEL_SET=0
 EFFORT_SET=0
+ROLE_SET=0
+DATA_CLASS_SET=0
+ROUTE_ID_SET=0
 BACKEND_SET=0
 MODE_SET=0
 YOLO_SET=0
@@ -471,6 +480,9 @@ for a in "$@"; do
       harness) HARNESS_ARG=$a; HARNESS_SET=1 ;;
       model) MODEL=$a; MODEL_SET=1 ;;
       effort) EFFORT=$a; EFFORT_SET=1 ;;
+      role) ROLE=$a; ROLE_SET=1 ;;
+      data_class) DATA_CLASS=$a; DATA_CLASS_SET=1 ;;
+      route_id) ROUTE_ID=$a; ROUTE_ID_SET=1 ;;
       backend) BACKEND_ARG=$a; BACKEND_SET=1 ;;
       mode) MODE=$a; MODE_SET=1 ;;
       yolo) YOLO=$a; YOLO_SET=1 ;;
@@ -490,6 +502,12 @@ for a in "$@"; do
     --model=*) MODEL=${a#--model=}; MODEL_SET=1 ;;
     --effort) want_value=effort ;;
     --effort=*) EFFORT=${a#--effort=}; EFFORT_SET=1 ;;
+    --role) want_value=role ;;
+    --role=*) ROLE=${a#--role=}; ROLE_SET=1 ;;
+    --data-class) want_value=data_class ;;
+    --data-class=*) DATA_CLASS=${a#--data-class=}; DATA_CLASS_SET=1 ;;
+    --route-id) want_value=route_id ;;
+    --route-id=*) ROUTE_ID=${a#--route-id=}; ROUTE_ID_SET=1 ;;
     --backend) want_value=backend ;;
     --backend=*) BACKEND_ARG=${a#--backend=}; BACKEND_SET=1 ;;
     --mode) want_value=mode ;;
@@ -505,6 +523,9 @@ done
 [ "$HARNESS_SET" -eq 0 ] || [ -n "$HARNESS_ARG" ] || { echo "error: --harness requires a non-empty value" >&2; exit 1; }
 [ "$MODEL_SET" -eq 0 ] || [ -n "$MODEL" ] || { echo "error: --model requires a non-empty value" >&2; exit 1; }
 [ "$EFFORT_SET" -eq 0 ] || [ -n "$EFFORT" ] || { echo "error: --effort requires a non-empty value" >&2; exit 1; }
+[ "$ROLE_SET" -eq 0 ] || [ -n "$ROLE" ] || { echo "error: --role requires a non-empty value" >&2; exit 1; }
+[ "$DATA_CLASS_SET" -eq 0 ] || [ -n "$DATA_CLASS" ] || { echo "error: --data-class requires a non-empty value" >&2; exit 1; }
+[ "$ROUTE_ID_SET" -eq 0 ] || [ -n "$ROUTE_ID" ] || { echo "error: --route-id requires a non-empty value" >&2; exit 1; }
 [ "$BACKEND_SET" -eq 0 ] || [ -n "$BACKEND_ARG" ] || { echo "error: --backend requires a non-empty value" >&2; exit 1; }
 [ "$MODE_SET" -eq 0 ] || [ -n "$MODE" ] || { echo "error: --mode requires a non-empty value" >&2; exit 1; }
 [ "$YOLO_SET" -eq 0 ] || [ -n "$YOLO" ] || { echo "error: --yolo requires a non-empty value" >&2; exit 1; }
@@ -536,6 +557,8 @@ if [ "$RELAUNCH" -eq 1 ]; then
   [ "$KIND_SET" -eq 0 ] || { echo "error: --relaunch reuses the task's recorded kind; --scout/--secondmate cannot override it" >&2; exit 1; }
   [ "$MODE_SET" -eq 0 ] || { echo "error: --relaunch reuses the task's recorded delivery mode; --mode cannot override it" >&2; exit 1; }
   [ "$YOLO_SET" -eq 0 ] || { echo "error: --relaunch reuses the task's recorded yolo posture; --yolo cannot override it" >&2; exit 1; }
+  [ "$ROLE_SET" -eq 0 ] || { echo "error: --relaunch reuses the task's Router V2 role; --role cannot override it" >&2; exit 1; }
+  [ "$DATA_CLASS_SET" -eq 0 ] || { echo "error: --relaunch reuses the task's Router V2 data class; --data-class cannot override it" >&2; exit 1; }
 else
   # Delivery contract (AGENTS.md section 7). A ship task's mode and yolo are
   # firstmate's per-task decision, so they are required and closed-set validated
@@ -3718,6 +3741,9 @@ preserve_relaunch_meta() {
   echo "tasktmp=$TASK_TMP"
   echo "model=${MODEL:-default}"
   echo "effort=${EFFORT:-default}"
+  [ -z "$ROLE" ] || echo "role=$ROLE"
+  [ -z "$DATA_CLASS" ] || echo "data_class=$DATA_CLASS"
+  [ -z "$ROUTE_ID" ] || echo "route_id=$ROUTE_ID"
   [ -z "${BUSY_GEN:-}" ] || echo "busy_gen=$BUSY_GEN"
   echo "spawn_gen=$SPAWN_GEN"
   # Default-off writes no traceparent= line.
@@ -3749,7 +3775,11 @@ preserve_relaunch_meta() {
     echo "projects=$SECONDMATE_PROJECTS"
   fi
   if [ "$RELAUNCH" -eq 1 ]; then
-    preserve_relaunch_meta
+    if [ "$ROUTE_ID_SET" -eq 1 ]; then
+      preserve_relaunch_meta | awk -F= '$1 != "route_id"'
+    else
+      preserve_relaunch_meta
+    fi
   fi
   if [ "$SPAWN_CONTROL_PARENT" = 1 ] && [ -n "${FM_CONTROL_RELAUNCH_TX:-}" ]; then
     echo "control_relaunch_tx=$FM_CONTROL_RELAUNCH_TX"
