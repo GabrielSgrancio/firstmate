@@ -177,6 +177,10 @@ test_stale_pool_base_refreshes_before_branching() {
   branch_head=$(git -C "$POOL_DIR" rev-parse HEAD)
   [ "$branch_head" = "$current" ] || fail "spawn left the pooled worktree on stale history"
   [ "$branch_head" != "$INITIAL_SHA" ] || fail "fixture did not prove origin/main advanced past the pool base"
+  assert_grep "base_sha=$current" "$HOME_DIR/state/$id.meta" \
+    "spawn did not record the exact refreshed base commit"
+  assert_grep 'target_branch=main' "$HOME_DIR/state/$id.meta" \
+    "spawn did not record the target branch"
   if [ "${FM_TEST_EVIDENCE:-0}" = 1 ]; then
     printf '# observed spawn: %s\n' "$(printf '%s\n' "$out" | tail -n 1)"
     printf '# observed base: HEAD=%s origin/main=%s advanced-main=%s\n' \
@@ -256,6 +260,10 @@ test_originless_pool_launches_without_a_freshness_fetch() {
   [ ! -e "$POOL_DIR/.git/FETCH_HEAD" ] || fail "spawn fetched against a pooled worktree with no origin"
   [ "$(git -C "$POOL_DIR" rev-parse HEAD)" = "$before" ] \
     || fail "spawn moved HEAD on an origin-less pooled worktree that had nothing to refresh against"
+  assert_grep "base_sha=$before" "$HOME_DIR/state/$id.meta" \
+    "origin-less spawn did not record the exact base commit"
+  assert_grep 'target_branch=main' "$HOME_DIR/state/$id.meta" \
+    "origin-less spawn did not record the target branch"
   if [ "${FM_TEST_EVIDENCE:-0}" = 1 ]; then
     printf '# observed origin-less launch: %s\n' "$(printf '%s\n' "$out" | tail -n 1)"
   fi

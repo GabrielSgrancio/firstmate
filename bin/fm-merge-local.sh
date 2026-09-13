@@ -16,6 +16,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
+# shellcheck source=bin/fm-base-reconciliation-lib.sh
+. "$SCRIPT_DIR/fm-base-reconciliation-lib.sh"
 "$FM_ROOT/bin/fm-guard.sh" || true
 # Role partition: landing local-only work is MAIN-owned; the Pi supervision
 # branch reports readiness and never lands (contract: bin/fm-lease-lib.sh;
@@ -51,6 +53,35 @@ BRANCH="fm/$ID"
 git -C "$PROJ" rev-parse --verify --quiet "refs/heads/$BRANCH" >/dev/null || { echo "error: branch $BRANCH does not exist in $PROJ" >&2; exit 1; }
 
 DEFAULT=$(default_branch) || { echo "error: cannot determine default branch for $PROJ; expected origin/HEAD, main, or master" >&2; exit 1; }
+
+RECORDED_BASE_SHA=$(grep '^base_sha=' "$META" | tail -1 | cut -d= -f2- || true)
+RECORDED_TARGET_BRANCH=$(grep '^target_branch=' "$META" | tail -1 | cut -d= -f2- || true)
+if [ -n "$RECORDED_BASE_SHA" ] || [ -n "$RECORDED_TARGET_BRANCH" ]; then
+  if [ -z "$RECORDED_BASE_SHA" ] || [ -z "$RECORDED_TARGET_BRANCH" ]; then
+    echo "REFUSED: task $ID has incomplete base provenance; expected both base_sha= and target_branch= in $META" >&2
+    exit 1
+  fi
+  if [ "$RECORDED_TARGET_BRANCH" != "$DEFAULT" ]; then
+    echo "REFUSED: task $ID targets '$RECORDED_TARGET_BRANCH', but local landing targets '$DEFAULT'; refusing to compare or merge across target branches" >&2
+    exit 1
+  fi
+  base_check_status=0
+  fm_base_reconciliation_check "$PROJ" "$BRANCH" "$RECORDED_BASE_SHA" \
+    "$RECORDED_TARGET_BRANCH" || base_check_status=$?
+  if [ "$base_check_status" -ne 0 ]; then
+    base_summary=$(fm_base_reconciliation_summary)
+    if [ "$base_check_status" -eq 1 ]; then
+      if ! grep -Fq 'NEEDS_BASE_RECONCILIATION' "$STATE/$ID.status" 2>/dev/null; then
+        printf 'blocked: NEEDS_BASE_RECONCILIATION [key=base-reconciliation]: %s\n' \
+          "$base_summary" >> "$STATE/$ID.status"
+      fi
+      echo "REFUSED: NEEDS_BASE_RECONCILIATION for $ID; reconcile $BRANCH onto current $DEFAULT before local landing ($base_summary)" >&2
+    else
+      echo "REFUSED: task $ID base provenance could not be verified; refusing local landing ($base_summary)" >&2
+    fi
+    exit 1
+  fi
+fi
 
 # The project's main checkout must be on its default branch and clean, so the
 # fast-forward lands predictably (firstmate never writes here otherwise).

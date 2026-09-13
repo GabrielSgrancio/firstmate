@@ -197,6 +197,8 @@
 #   fetching or resetting its base. An unreachable detected origin, unresolved
 #   default branch, or non-clean worktree refuses a fresh spawn rather than
 #   risking a PR based on stale history or discarding local work.
+#   Fresh ship and scout metadata records base_sha and target_branch before the
+#   worker can create its branch, so delivery can audit the actual base later.
 #   A slot whose only deviation is a stale submodule gitlink is refused by that
 #   same clean check, but is reported as a stale checkout naming each submodule
 #   and both pins; nothing is converged or removed, and no remedy is suggested.
@@ -407,6 +409,8 @@ if [ -e "$STATE" ] || [ -L "$STATE" ]; then
 fi
 # shellcheck source=bin/fm-ff-lib.sh
 . "$SCRIPT_DIR/fm-ff-lib.sh"
+# shellcheck source=bin/fm-base-reconciliation-lib.sh
+. "$SCRIPT_DIR/fm-base-reconciliation-lib.sh"
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
 fm_backlog_directory_present "$STATE" "state directory" || {
@@ -1230,6 +1234,8 @@ if ! fm_lock_try_acquire "$SPAWN_TASK_LOCK"; then
   exit 1
 fi
 SPAWN_TASK_LOCK_HELD=1
+SPAWN_BASE_SHA=
+SPAWN_TARGET_BRANCH=
 PROJ=
 ARG3=
 FIRSTMATE_HOME=
@@ -2518,6 +2524,18 @@ freshen_spawn_worktree_base() {  # <worktree>
   fi
 }
 
+record_spawn_base_provenance() {  # <worktree>
+  local worktree=$1
+  SPAWN_BASE_SHA=$(git -C "$worktree" rev-parse --verify --quiet HEAD 2>/dev/null) || {
+    echo "error: could not record the base commit for task $ID from '$worktree'" >&2
+    return 1
+  }
+  SPAWN_TARGET_BRANCH=$(default_branch "$worktree") || {
+    echo "error: could not record the target branch for task $ID from '$worktree'" >&2
+    return 1
+  }
+}
+
 herdr_projection_meta_field_exact() {  # <meta> <key>
   local meta=$1 key=$2 count
   [ -f "$meta" ] && [ ! -L "$meta" ] || return 1
@@ -3185,6 +3203,14 @@ fi
 if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ]; then
   freshen_spawn_worktree_base "$WT" || exit 1
 fi
+if [ "$KIND" != secondmate ]; then
+  if [ "$RELAUNCH" -eq 1 ]; then
+    SPAWN_BASE_SHA=$(fm_meta_get "$RELAUNCH_META" base_sha)
+    SPAWN_TARGET_BRANCH=$(fm_meta_get "$RELAUNCH_META" target_branch)
+  else
+    record_spawn_base_provenance "$WT" || exit 1
+  fi
+fi
 
 # Pre-register Claude's workspace trust for the worktree, at the first point the
 # worktree is known and before any per-task state is created below. The dialog
@@ -3672,7 +3698,7 @@ SPAWN_META_PATH=$SPAWN_META_TMP
 preserve_relaunch_meta() {
   awk -F= '
     BEGIN {
-      split("window endpoint_task_id worktree project harness kind mode yolo tasktmp model effort busy_gen spawn_gen traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id home projects control_relaunch_tx", keys, " ")
+      split("window endpoint_task_id worktree project base_sha target_branch harness kind mode yolo tasktmp model effort busy_gen spawn_gen traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id home projects control_relaunch_tx", keys, " ")
       for (i in keys) owned[keys[i]] = 1
     }
     !($1 in owned)
@@ -3683,6 +3709,8 @@ preserve_relaunch_meta() {
   echo "endpoint_task_id=$ID"
   echo "worktree=$WT"
   echo "project=$PROJ_ABS"
+  [ -z "$SPAWN_BASE_SHA" ] || echo "base_sha=$SPAWN_BASE_SHA"
+  [ -z "$SPAWN_TARGET_BRANCH" ] || echo "target_branch=$SPAWN_TARGET_BRANCH"
   echo "harness=$HARNESS"
   echo "kind=$KIND"
   [ -z "$MODE" ] || echo "mode=$MODE"
