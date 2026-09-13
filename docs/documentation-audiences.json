@@ -385,6 +385,10 @@
       "audience": "maintainer-architecture"
     },
     {
+      "path": "docs/ORCHESTRATOR_API_CANONICAL_REPORT.md",
+      "audience": "maintainer-architecture"
+    },
+    {
       "path": "docs/scripts.md",
       "audience": "operator-current"
     },
