@@ -293,6 +293,13 @@ if [ "$FORCE" = --force ] && [ "$(fm_lease_actor)" = branch ]; then
   echo "error: forced teardown refused - the supervision branch cannot discard work" >&2
   exit "$FM_LEASE_REFUSE_EXIT"
 fi
+# Structural separation: ordinary workers / worktrees cannot force teardown (P0-4).
+if [ "$FORCE" = --force ]; then
+  if [ -n "${FM_TASK_ID:-}" ] || [[ "$(pwd)" == *"/.treehouse/"* ]] || [ "${FM_ROLE:-}" = "worker" ]; then
+    echo "error: forced teardown refused - workers cannot force teardown or discard work (Captain-only authority)" >&2
+    exit 1
+  fi
+fi
 fm_lease_guard "$ID" "teardown (fm-teardown)"
 
 # A Treehouse slot has the managed pool's fixed <pool>/<slot>/<repo> layout.

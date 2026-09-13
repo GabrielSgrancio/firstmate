@@ -629,7 +629,7 @@ run_teardown() {
   FM_DATA_OVERRIDE="$case_dir/data" \
   FM_CONFIG_OVERRIDE="$case_dir/config" \
   PATH="$case_dir/fakebin:${FM_TEARDOWN_TEST_PATH:-$PATH}" \
-    "$TEARDOWN" task-x1 "$@"
+    bash -c 'cd "$1" && shift && exec "$@"' _ "$case_dir" "$TEARDOWN" task-x1 "$@"
 }
 
 # Seed a real backlog carrying task-x1 as In flight, so a teardown in this case
@@ -2192,7 +2192,8 @@ SH
     FM_CONFIG_OVERRIDE="$case_dir/config" FM_FAKE_HERDR_LOG="$log" FM_FAKE_HERDR_CLOSED="$closed" \
     FM_FAKE_HERDR_SESSION_LIST_GARBAGE="$([ "$mode" = unresolvable-lock ] && printf 1 || printf 0)" \
     PATH="$case_dir/fakebin:$PATH" \
-    "$teardown_bin" task-x1 --force > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+    bash -c 'cd "$1" && shift && exec "$@"' _ "$case_dir" "$teardown_bin" task-x1 --force \
+    > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
   [ "$rc" -ne 0 ] || fail "herdr-preflight-$mode: teardown continued without its required preflight"
   assert_grep "nothing was changed" "$case_dir/stderr" \
     "herdr-preflight-$mode: the retryable pre-return refusal was not explained visibly"
@@ -3655,6 +3656,21 @@ EOF
   pass "the run abort and the leaked-process reap both complete before the destructive worktree return"
 }
 
+test_worker_cannot_force_teardown() {
+  local case_dir rc
+  case_dir=$(make_case worker-force-guard)
+  set +e
+  FM_TASK_ID=worker-task FM_ROLE=worker run_teardown "$case_dir" --force \
+    >"$case_dir/stdout" 2>"$case_dir/stderr"
+  rc=$?
+  set -e
+  [ "$rc" -eq 1 ] || fail "worker forced teardown guard returned $rc"
+  assert_grep "forced teardown refused - workers cannot force teardown" \
+    "$case_dir/stderr" "worker forced teardown guard did not identify the structural separation"
+  pass "worker forced teardown is structurally refused"
+}
+
+test_worker_cannot_force_teardown
 test_local_only_fork_remote_allows
 test_teardown_closes_the_backlog_item_itself
 test_teardown_manual_backend_leaves_the_backlog_to_the_operator

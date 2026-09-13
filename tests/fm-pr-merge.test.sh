@@ -365,7 +365,7 @@ run_pr_merge() {
   FM_TEST_GLAB_LOG="$case_dir/glab.log" \
   FM_TEST_GLAB_JSON="$case_dir/mr.json" \
   PATH="$case_dir/fakebin:$PATH" \
-    "$PR_MERGE" "$@"
+    bash -c 'cd "$1" && shift && exec "$@"' _ "$case_dir" "$PR_MERGE" "$@"
   rc=$?
   if [ "${case_dir##*/}" = unsafe-url-segment ] && [ "$rc" -eq 2 ]; then
     echo 'error: PR URL must match https://github.com/<owner>/<repo>/pull/<number>' >&2
@@ -2082,6 +2082,19 @@ test_secondmate_without_parent_binding_is_loud() {
   pass "a secondmate home that cannot report upward says so instead of merging in silence"
 }
 
+test_worker_cannot_invoke_pr_merge() {
+  local out rc
+  set +e
+  out=$(FM_TASK_ID=worker-task FM_ROLE=worker "$PR_MERGE" 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -eq 1 ] || fail "worker PR merge guard returned $rc"
+  assert_contains "$out" "PR merge refused - workers cannot merge PRs" \
+    "worker PR merge guard did not identify the structural separation"
+  pass "worker PR merge entrypoint is structurally refused"
+}
+
+test_worker_cannot_invoke_pr_merge
 test_github_zero_exit_queue_required_refuses_with_exact_retry
 test_github_closed_unqueued_outcome_omits_retry_flags
 test_github_agreeing_queue_rules_keep_retry_guidance

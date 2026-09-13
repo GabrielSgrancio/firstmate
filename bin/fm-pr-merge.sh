@@ -82,6 +82,12 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 . "$SCRIPT_DIR/fm-lease-lib.sh"
 fm_lease_forbid_branch "PR merge (fm-pr-merge)"
 
+# Structural separation: ordinary workers / worktrees cannot execute PR merges (P0-4).
+if [ -n "${FM_TASK_ID:-}" ] || [[ "$(pwd)" == *"/.treehouse/"* ]] || [ "${FM_ROLE:-}" = "worker" ]; then
+  echo "error: PR merge refused - workers cannot merge PRs (Captain/supervisor-only authority)" >&2
+  exit 1
+fi
+
 if [ "$#" -lt 2 ]; then
   echo "error: invalid PR merge request" >&2
   exit 2
