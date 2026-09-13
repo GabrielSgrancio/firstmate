@@ -15,6 +15,7 @@ No item disappears from this graph without an explicit classification below.
 | Stale-base guard (`base_sha`/`target_branch` provenance, delivery-time drift check) | Built fresh by Codex, independently confirming the same root cause the inventory scout found | `c1e3e283` | `tests/fm-base-reconciliation.test.sh`, `tests/fm-spawn-pool-base-freshen.test.sh` pass |
 | Reconciliation sprint documentation (source-control reality, stale-base root cause, landing/cleanup plans, operational-state architecture docs) | This campaign's own scout output | `65904c3f` | N/A (docs only) |
 | Router V2 canonical port (10 roles, data gates, quota truth, effort dimension; security/path/backend/schema fixes; 4 deterministic test suites) | `overnight/arch-evolution:c270d22e` (`bin/fm-router-v2.mjs` blob `af6d6755`) | `8a00835c` — **VERIFIED_LANDED**, confirmed from an independent fresh clone before landing and re-verified in place on `main` afterward | `tests/fm-router-v2-enforcement.test.mjs`, `tests/fm-router-herdr-dispatch-e2e.test.mjs`, `tests/fm-dynamic-discovery-acceptance.test.mjs`, `tests/fm-quota-failover-auto-resume-e2e.test.mjs`, all 4/4 from a clean clone |
+| Orchestrator API (8 verbs), dispatch governed through canonical Router V2, `dataClass` required/fail-closed, `harness`/`model` overrides rejected | `overnight/arch-evolution:9186aac1` + `c270d22e` | `32ae2961` — **VERIFIED_LANDED**, independently re-verified from a fresh clone by firstmate | `tests/fm-orchestrator-api.test.mjs` + `tests/fm-router-v2-enforcement.test.mjs` both pass from clean clone |
 
 ## Landed on `gabriel-os` local `main`
 
@@ -46,8 +47,7 @@ No item disappears from this graph without an explicit classification below.
 | Capability | Status |
 | --- | --- |
 | Provider discovery, quota normalization/economics beyond what Router V2 canonicalization ported | `PRESERVED_FOR_FUTURE_RECONCILIATION` — `ADAPT` per capability map, next phase |
-| Orchestrator API / governed Router→Herdr dispatch | `PRESERVED_FOR_FUTURE_RECONCILIATION` — next phase after Router V2 lands |
-| Worker quota failover rebuild around current lease/checkpoint owners | `PRESERVED_FOR_FUTURE_RECONCILIATION` |
+| Worker quota failover rebuild around current lease/checkpoint owners | `PRESERVED_FOR_FUTURE_RECONCILIATION` — next phase |
 | Gabriel/FirstMate TUI, `gabriel` launcher/doctor | `PRESERVED_FOR_FUTURE_RECONCILIATION` — `ADAPT`, after routing is stable per capability map's recommended order |
 | Mission event store (`ADAPT_TO_EVENT_STORE` per the accepted ADR) | `PRESERVED_FOR_FUTURE_RECONCILIATION` — design complete (`docs/FIRSTMATE_OPERATIONAL_STATE_ADR.md`), implementation not started |
 | Supervisor rehydration E2E | `PRESERVED_FOR_FUTURE_RECONCILIATION` — contract designed (`docs/SUPERVISOR_REHYDRATION_CONTRACT.md`), not implemented or tested |
