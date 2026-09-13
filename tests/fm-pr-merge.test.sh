@@ -1730,7 +1730,8 @@ test_gitlab_missing_tool_refuses_before_recording() {
     FM_TEST_GLAB_LOG="$case_dir/glab.log" \
     FM_TEST_GLAB_JSON="$case_dir/mr.json" \
     PATH="$case_dir/no$tool" \
-      "$PR_MERGE" task-x1 "$MR_URL" > "$case_dir/stdout" 2> "$case_dir/stderr"
+      bash -c 'cd "$1" && shift && exec "$@"' _ "$case_dir" \
+        "$PR_MERGE" task-x1 "$MR_URL" > "$case_dir/stdout" 2> "$case_dir/stderr"
     rc=$?
     set -e
 
