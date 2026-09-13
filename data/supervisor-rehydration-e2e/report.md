@@ -36,9 +36,15 @@ A production harness replacement command still needs to invoke `active` and
 
 ## Verification
 
-The focused E2E was run three times in an independent fresh clone of the
-committed branch tip.
-The pass rate and exact command output are recorded here after that gate.
+The focused E2E was run three times in an independent fresh clone of committed
+branch tip `d105e0745bdc8e0dbb0af5751f229d5f80d212b4`.
+`git ls-files --error-unmatch` confirmed
+`supervisor-a.mjs`, `supervisor-b.sh`, and `synthetic-worker.sh` were tracked.
+The exact command was `node --test tests/fm-supervisor-rehydration-e2e.test.mjs`.
+Run 1 passed in 5.88 seconds.
+Run 2 passed in 5.23 seconds.
+Run 3 passed in 5.29 seconds.
+Fresh-clone pass rate: 3/3.
 
 ## Final answer
 
