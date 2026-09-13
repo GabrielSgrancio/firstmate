@@ -1,6 +1,6 @@
 # ADR: FirstMate operational-state storage model
 
-- Status: Proposed (research/design deliverable — no migration performed)
+- Status: Implemented (event store and materializer; supervisor bootstrap remains deferred)
 - Date: 2026-09-13
 - Authors: crewmate `reconciliation-operational-state-architecture` (scout), for captain review
 - Format note: this repo has no `docs/adr/` directory and no prior ADR was
@@ -57,6 +57,9 @@ implementing any of it in this sprint:
    starting shape for the eventual event-appending CLI, but its v2 schema is
    discarded in favor of an events-in/materialized-view-out design; its
    sessions concept survives as one event type among several.
+   The implementation stores the canonical log at
+   `data/missions/<id>/events.jsonl` and derives `mission.json` and the
+   compatibility `capsule.json` from it.
 4. **Reuse the `bin/fm-captain-hold.sh` design pattern**, not its code: keep
    decision/hold identity scoped to the backlog task id (no new ID
    namespace), and give the mission-event store its own explicit
@@ -100,15 +103,10 @@ the reasons above.
   dependency; the existing `.status` append contract crewmates already know
   becomes a special case of "append an event," not a parallel concept to
   learn.
-- **Negative / cost:** requires actually designing the event schema and
-  writing the materializer (not done in this sprint, by instruction); every
-  current ad hoc writer (§2a/§2c/§11's sources) needs to be ported to append
-  events instead of overwriting JSON, which is real migration work, not free;
-  until that port happens, the three ad hoc sources remain exactly as
-  unreliable as documented in the current-state inventory.
-- **Explicitly deferred, not decided here:** the exact event schema/type
-  list (the checkpoint policy in `SUPERVISOR_REHYDRATION_CONTRACT.md`
-  proposes the event vocabulary but not the on-disk record format); whether
+- **Negative / cost:** every current ad hoc writer (§2a/§2c/§11's sources)
+  still needs to be ported to append events instead of overwriting JSON, which
+  is real migration work, not free.
+- **Explicitly deferred, not decided here:** whether
   `docs/adr/` becomes a standing convention; whether Router/Gateway are ever
   given write access to mission events or remain read-only consumers of the
   materialized view (recommend read-only, consistent with the captain's
@@ -187,10 +185,9 @@ Where `delivery_state` is one of four explicit values, not a single
   branch in a freshly-synced clone, not just that a merge API call returned
   success.
 
-A task's event stream would carry `delivery_state` transitions as first-class
-events (`task_execution_done`, `task_delivery_ready`, `task_landed`,
-`task_verified_landed`), each carrying the concrete evidence (PR URL, merge
-commit sha, or fast-forward commit sha) rather than a bare boolean. This
+A task's event stream carries `delivery_state_changed` events with one of the
+four values and concrete evidence (PR URL, merge commit sha, or fast-forward
+commit sha) rather than a bare boolean. This
 directly satisfies the brief's cross-reference instruction: whatever
 `reconciliation-stale-base-bug` finds about stale-base failures is evidence
 for *why* `LANDED` must be independently re-verified rather than trusted from
@@ -216,3 +213,43 @@ answer at query time, instead of re-deriving "is this actually landed" by
 hand for every replacement supervisor — which is the concrete instance of
 "archaeology" the captain named `ufd-gateway-repair`/`ufd-mcp-probe-fix` as
 examples of tonight.
+
+## Implemented event-store contract
+
+The canonical source is one newline-delimited JSON log at
+`data/missions/<mission-id>/events.jsonl`.
+Every record has `schema_version: 1`, an idempotent `event_id`, a contiguous
+one-based `sequence`, an RFC 3339 UTC `occurred_at`, a checkpoint `type`, and a
+JSON-object `payload`.
+The writer holds a per-mission `.events.lock` using the existing
+`fm-wake-lib.sh` lock-owner and stale-holder recovery pattern.
+It writes the complete new log through `tempfile.mkstemp` followed by
+`os.replace`, so a process killed before replacement leaves the prior log
+unchanged.
+Repeated writes with the same event id and equivalent type/payload are no-ops;
+reuse with different content is rejected.
+
+The supported checkpoint types are `mission_created`, `session_started`,
+`session_ended`, `task_dispatched`, `task_blocked`, `task_completed`,
+`captain_hold_created`, `captain_hold_resolved`, `worktree_created`,
+`commit_produced`, `delivery_state_changed`, `phase_transition`,
+`supervisor_handoff`, and `supervisor_termination`.
+`delivery_state_changed` requires `EXECUTION_DONE`, `DELIVERY_READY`, `LANDED`,
+or `VERIFIED_LANDED` and carries `task_id` plus evidence.
+Task events reference `state/<task-id>.meta` by `task_id`; they never copy that
+metadata's `base_sha` or `target_branch` into the mission log or view.
+Captain holds in the view contain only the task id, hold id, backlog pointer,
+and open/resolved status; hold content remains owned by `tasks-axi` and
+`data/backlog.md`.
+
+`mission.json` is schema version 3 and is rebuildable by replaying the log.
+Its materializer uses a byte cursor and file identity, following the
+incremental cursor-backed fold in `bin/fm-classify-lib.sh` rather than
+re-reading the complete log on every append.
+If the final line is malformed or lacks its terminating newline, the
+materializer reports and ignores that torn tail while retaining every prior
+event.
+The cursor is advanced only through the last valid byte, and the next append
+rewrites the valid prefix atomically before adding its new record.
+`capsule.json` and `state/mission-capsule.json` are derived compatibility views,
+never independent sources of mission state.

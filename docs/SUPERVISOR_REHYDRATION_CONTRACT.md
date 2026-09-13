@@ -1,11 +1,11 @@
-# Supervisor rehydration contract (design, not implemented)
+# Supervisor rehydration contract (bootstrap design; event store implemented)
 
 Companion to `docs/FIRSTMATE_OPERATIONAL_STATE_CURRENT.md` and
 `docs/FIRSTMATE_OPERATIONAL_STATE_OPTIONS.md`/`_ADR.md`. This document designs
 the intended SessionStart/supervisor-rehydration sequence and the checkpoint
-policy that must feed it. It is a contract for a future implementation, not
-code, per the brief's explicit "do not implement beyond a documented
-contract."
+policy that feeds it.
+The event-log and materializer implementation is owned by `bin/fm-mission.sh`;
+the bootstrap sequence below remains a separate future phase.
 
 ## Design goals, restated from the brief
 
@@ -156,31 +156,33 @@ information a supervisor needs.
 ## Checkpoint policy
 
 Per the brief: prefer event-driven checkpoints over periodic snapshots where
-event-derived state suffices. Proposed event vocabulary (feeding the ADR's
-event-log design), each carrying enough evidence to make its effect on the
-materialized view idempotent and auditable:
+event-derived state suffices.
+The implemented event vocabulary below feeds the ADR's event-log design, with
+each record carrying enough identity and evidence to make its materialized-view
+effect auditable:
 
 - `mission_created` — id, intent, original-prompt pointer (see below).
 - `session_started` / `session_ended` — harness, session id, end reason
   (supersede/quota-exhausted/completed/crashed) — direct carry-over from
   current-state §2a's `sessions[]`/`sessions_history`, now as events instead
   of an overwritten array.
-- `task_dispatched` — task id, worktree, harness, repo, base_sha.
-- `task_execution_done` / `task_blocked` / `worker_completed` — mirrors the
+- `task_dispatched` — task id, worktree, harness, repo, and a pointer to the
+  task's existing `.meta`; `base_sha` and `target_branch` remain task-meta
+  fields and are not copied into mission events.
+- `task_blocked` / `task_completed` — mirrors the
   existing `.status` contract's `done:`/`blocked:` vocabulary (current-state
   §3) so crewmates need no new reporting habit; the event store's ingestion
   can subscribe to the existing `.status` append or (cleaner, longer-term)
   the append itself becomes the event, per the ADR.
-- `captain_hold_created` / `captain_hold_resolved` — task id, reason,
-  resolution — mirrors `bin/fm-captain-hold.sh`'s existing `hold`/`answer`
-  calls (current-state §6); these calls are the natural place to also emit
-  the mission-level event, since they already have the task id and mission
-  membership is a task-level property.
+- `captain_hold_created` / `captain_hold_resolved` — task id, hold id, and a
+  pointer into the backlog — mirrors `bin/fm-captain-hold.sh`'s existing
+  `hold`/`answer` calls (current-state §6) without copying hold content into
+  the mission layer.
 - `worktree_created` / `commit_produced` — repo, worktree path, branch,
   commit sha — feeds the ADR's source-control chain directly.
-- `task_delivery_ready` / `task_landed` / `task_verified_landed` — the ADR's
-  four-value delivery-state model, each carrying its evidence (PR URL, merge
-  commit, or fast-forward commit).
+- `delivery_state_changed` — the ADR's four-value delivery-state model,
+  carrying `task_id` and evidence (PR URL, merge commit, or fast-forward
+  commit).
 - `phase_transition` — free-form, for mission-specific milestones that don't
   fit the above (keeps the vocabulary from needing to anticipate every
   mission shape up front).

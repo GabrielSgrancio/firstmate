@@ -1,16 +1,27 @@
 #!/usr/bin/env bash
-# Durable mission intent and resume capsule.
+# Canonical per-mission event store and derived resume views.
 #
 # Usage:
 #   fm-mission.sh init <mission-id> [--intent <text>] [--prompt-file <path>]
 #       [--task-graph-file <json>] [--next <action>]
-#   fm-mission.sh session-start <mission-id> --harness <harness> [--session-id <id>]
+#       [--prompt-source-transcript <path>] [--prompt-step-index <n>]
+#       [--prompt-classification <EXACT_RECOVERED|RECONSTRUCTED|SUMMARIZED>]
+#   fm-mission.sh append <mission-id> --event-id <id> --type <type>
+#       [--payload <json> | --payload-file <path>] [--occurred-at <timestamp>]
+#   fm-mission.sh session-start <mission-id> --harness <harness>
+#       [--session-id <id>]
 #   fm-mission.sh session-end <mission-id> --reason <reason>
-#   fm-mission.sh capsule <mission-id> [--next <action>]
+#   fm-mission.sh materialize <mission-id>
 #   fm-mission.sh show <mission-id>
+#   fm-mission.sh capsule <mission-id> [--next <action>]
+#   fm-mission.sh active
 #
 # FM_HOME selects the private home; FM_DATA_OVERRIDE and FM_STATE_OVERRIDE are
 # accepted for isolated tests and alternate home layouts.
+#
+# The event log and materialized view use the existing tempfile.mkstemp +
+# os.replace primitive below. The per-mission lock uses the same lock owner and
+# stale-holder recovery as state/.wake-queue.lock in fm-wake-lib.sh.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -19,15 +30,529 @@ FM_HOME="${FM_HOME:-$FM_ROOT}"
 DATA_DIR="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 STATE_DIR="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 MISSIONS_DIR="$DATA_DIR/missions"
+# shellcheck disable=SC2034
+STATE="$STATE_DIR"
+# shellcheck source=bin/fm-wake-lib.sh
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/fm-wake-lib.sh"
 
 die() { printf 'error: %s\n' "$1" >&2; exit 1; }
 valid_id() { case "${1-}" in ''|*[!A-Za-z0-9._-]*) return 1 ;; esac; }
 usage() { sed -n '2,/^set -u$/p' "${BASH_SOURCE[0]}" | sed '$d; s/^# \{0,1\}//'; }
 mission_dir() { printf '%s/%s\n' "$MISSIONS_DIR" "$1"; }
-mission_file() { printf '%s/mission.json\n' "$(mission_dir "$1")"; }
+
+MISSION_LOCK=
+release_mission_lock() {
+  [ -n "$MISSION_LOCK" ] || return 0
+  fm_lock_release "$MISSION_LOCK" || true
+  MISSION_LOCK=
+}
+
+acquire_mission_lock() {
+  local id=$1 rc=0 timeout=${FM_MISSION_LOCK_TIMEOUT:-10}
+  MISSION_LOCK="$(mission_dir "$id")/.events.lock"
+  fm_lock_acquire_wait_bounded "$MISSION_LOCK" "$timeout" || rc=$?
+  [ "$rc" -eq 0 ] || {
+    if [ "$rc" -eq 124 ]; then
+      die "mission event log is locked${FM_LOCK_HELD_PID:+ by pid $FM_LOCK_HELD_PID}"
+    fi
+    die 'could not acquire mission event-log lock'
+  }
+  trap 'release_mission_lock' EXIT
+  if [ -n "${FM_MISSION_LOCK_HOLD_SECS:-}" ]; then
+    sleep "$FM_MISSION_LOCK_HOLD_SECS"
+  fi
+}
+
+run_store() {
+  python3 - "$MISSIONS_DIR" "$STATE_DIR" "$@" <<'PY'
+import copy
+import hashlib
+import json
+import os
+import re
+import sys
+import tempfile
+from datetime import datetime, timezone
+
+missions_dir, state_dir, operation = sys.argv[1:4]
+args = sys.argv[4:]
+EVENT_SCHEMA_VERSION = 1
+VIEW_SCHEMA_VERSION = 3
+VALID_DELIVERY_STATES = {"EXECUTION_DONE", "DELIVERY_READY", "LANDED", "VERIFIED_LANDED"}
+VALID_TYPES = {
+    "mission_created", "session_started", "session_ended", "task_dispatched",
+    "task_blocked", "task_completed", "captain_hold_created",
+    "captain_hold_resolved", "worktree_created", "commit_produced",
+    "delivery_state_changed", "phase_transition", "supervisor_handoff",
+    "supervisor_termination",
+}
+FORBIDDEN_META_FIELDS = {"base_sha", "target_branch"}
+ID_RE = re.compile(r"^[A-Za-z0-9._:-]+$")
+
+
+class StoreError(Exception):
+    pass
+
+
+def now_utc():
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def atomic_write(path, data, mode=0o600):
+    """The fm-mission atomic-write primitive: tempfile.mkstemp + os.replace."""
+    directory = os.path.dirname(path) or "."
+    os.makedirs(directory, mode=0o700, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix="." + os.path.basename(path) + ".", dir=directory)
+    try:
+        os.fchmod(fd, mode)
+        if isinstance(data, bytes):
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(data)
+        else:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(data)
+        os.replace(temporary, path)
+    except Exception:
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
+        raise
+
+
+def mission_path(mission_id):
+    return os.path.join(missions_dir, mission_id)
+
+
+def log_path(mission_id):
+    return os.path.join(mission_path(mission_id), "events.jsonl")
+
+
+def view_path(mission_id):
+    return os.path.join(mission_path(mission_id), "mission.json")
+
+
+def cursor_path(mission_id):
+    return os.path.join(mission_path(mission_id), ".materializer.cursor")
+
+
+def capsule_path(mission_id):
+    return os.path.join(mission_path(mission_id), "capsule.json")
+
+
+def require_mission_id(mission_id):
+    if not re.fullmatch(r"[A-Za-z0-9._-]+", mission_id or "") or mission_id.startswith("-"):
+        raise StoreError("invalid mission id")
+
+
+def require_event_id(event_id):
+    if not ID_RE.fullmatch(event_id or ""):
+        raise StoreError("event id must contain only letters, digits, dot, underscore, colon, or dash")
+
+
+def validate_no_meta_duplication(value):
+    if isinstance(value, dict):
+        forbidden = FORBIDDEN_META_FIELDS.intersection(value)
+        if forbidden:
+            raise StoreError("mission events must reference task .meta by task_id, not duplicate " + ", ".join(sorted(forbidden)))
+        for child in value.values():
+            validate_no_meta_duplication(child)
+    elif isinstance(value, list):
+        for child in value:
+            validate_no_meta_duplication(child)
+
+
+def validate_event_type(event_type):
+    if event_type not in VALID_TYPES:
+        raise StoreError("unsupported mission event type: " + event_type)
+
+
+def validate_payload(event_type, payload):
+    validate_no_meta_duplication(payload)
+    if event_type in {"captain_hold_created", "captain_hold_resolved"}:
+        if {"reason", "resolution", "text"}.intersection(payload):
+            raise StoreError("captain hold events must reference backlog content by pointer, not copy it")
+    if event_type == "delivery_state_changed" and payload.get("delivery_state") not in VALID_DELIVERY_STATES:
+        raise StoreError("delivery_state_changed requires one of the four delivery states")
+
+
+def parse_json(text, label):
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise StoreError("invalid " + label + " JSON: " + str(exc)) from exc
+    if not isinstance(value, dict):
+        raise StoreError(label + " must be a JSON object")
+    return value
+
+
+def validate_record(record, offset):
+    if not isinstance(record, dict):
+        raise StoreError("event at byte %d is not an object" % offset)
+    if record.get("schema_version") != EVENT_SCHEMA_VERSION:
+        raise StoreError("event at byte %d has unsupported schema version" % offset)
+    for key in ("event_id", "sequence", "occurred_at", "type", "payload"):
+        if key not in record:
+            raise StoreError("event at byte %d is missing %s" % (offset, key))
+    require_event_id(record["event_id"])
+    if not isinstance(record["sequence"], int) or record["sequence"] < 1:
+        raise StoreError("event at byte %d has an invalid sequence" % offset)
+    validate_event_type(record["type"])
+    if not isinstance(record["payload"], dict):
+        raise StoreError("event at byte %d has a non-object payload" % offset)
+    validate_payload(record["type"], record["payload"])
+
+
+def read_records(path):
+    """Return complete records, the valid byte prefix, and a torn-tail flag."""
+    if not os.path.exists(path):
+        return [], b"", False
+    with open(path, "rb") as handle:
+        raw = handle.read()
+    records = []
+    valid_end = 0
+    for line in raw.splitlines(keepends=True):
+        start = valid_end
+        valid_end += len(line)
+        if not line.endswith(b"\n"):
+            return records, raw[:start], True
+        try:
+            record = json.loads(line.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            if valid_end == len(raw):
+                return records, raw[:start], True
+            raise StoreError("malformed non-final event-log line at byte " + str(start))
+        validate_record(record, start)
+        records.append(record)
+    return records, raw[:valid_end], False
+
+
+def validate_order(records):
+    seen = {}
+    for expected, record in enumerate(records, 1):
+        if record["sequence"] != expected:
+            raise StoreError("event sequence is not contiguous at %d" % record["sequence"])
+        prior = seen.get(record["event_id"])
+        if prior is not None and prior != record:
+            raise StoreError("event id is reused with different content: " + record["event_id"])
+        seen[record["event_id"]] = record
+
+
+def load_log(mission_id):
+    records, prefix, torn = read_records(log_path(mission_id))
+    validate_order(records)
+    return records, prefix, torn
+
+
+def new_view(mission_id):
+    return {
+        "schema_version": VIEW_SCHEMA_VERSION, "mission_id": mission_id,
+        "created_at": None, "updated_at": None, "status": "ACTIVE",
+        "intent": None, "original_prompt": None, "task_graph": [],
+        "next_action": "Continue the active mission", "current_session_id": None,
+        "sessions": [], "tasks": {}, "captain_holds": {}, "worktrees": [],
+        "phases": [], "supervisor_handoffs": [], "supervisor_termination": None,
+        "last_event": None,
+    }
+
+
+def task_for(view, payload):
+    task_id = payload.get("task_id")
+    if not isinstance(task_id, str) or not re.fullmatch(r"[A-Za-z0-9._-]+", task_id):
+        raise StoreError("task event requires a valid task_id")
+    return view["tasks"].setdefault(task_id, {
+        "task_id": task_id, "meta_pointer": "state/" + task_id + ".meta",
+        "delivery_state": None, "delivery_history": [], "worktree": None,
+        "branch": None, "repo": None, "harness": None, "commits": [],
+        "blocked": False, "completed": False, "last_event": None,
+    })
+
+
+def apply_event(view, record):
+    event_type = record["type"]
+    payload = record["payload"]
+    event_ref = {key: record[key] for key in ("event_id", "sequence", "type", "occurred_at")}
+    if event_type == "mission_created":
+        if view["created_at"] is not None:
+            raise StoreError("mission_created may occur only once")
+        view["created_at"] = record["occurred_at"]
+        view["intent"] = payload["intent"]
+        view["original_prompt"] = copy.deepcopy(payload["original_prompt"])
+        view["task_graph"] = copy.deepcopy(payload.get("task_graph", []))
+        view["next_action"] = payload.get("next_action") or view["next_action"]
+    elif event_type == "session_started":
+        for session in view["sessions"]:
+            if session["status"] == "RUNNING":
+                session.update(status="ENDED", ended_at=record["occurred_at"], end_reason="SUPERSEDED")
+        session = {"session_id": payload["session_id"], "harness": payload["harness"],
+                   "started_at": record["occurred_at"], "ended_at": None,
+                   "status": "RUNNING", "end_reason": None}
+        view["sessions"].append(session)
+        view["current_session_id"] = payload["session_id"]
+    elif event_type == "session_ended":
+        session_id = payload.get("session_id") or view.get("current_session_id")
+        for session in reversed(view["sessions"]):
+            if session["session_id"] == session_id and session["status"] == "RUNNING":
+                session.update(status="ENDED", ended_at=record["occurred_at"], end_reason=payload["reason"])
+                break
+        else:
+            raise StoreError("session-ended event does not identify a running session")
+        view["current_session_id"] = None
+    elif event_type in {"task_dispatched", "task_blocked", "task_completed", "delivery_state_changed"}:
+        task = task_for(view, payload)
+        if event_type == "task_dispatched":
+            for field in ("repo", "worktree", "branch", "harness"):
+                if field in payload:
+                    task[field] = payload[field]
+        elif event_type == "task_blocked":
+            task["blocked"] = True
+        elif event_type == "task_completed":
+            task["completed"] = True
+        else:
+            state = payload["delivery_state"]
+            task["delivery_state"] = state
+            task["delivery_history"].append({
+                "delivery_state": state, "event": event_ref,
+                "evidence": copy.deepcopy(payload.get("evidence", {})),
+            })
+        task["last_event"] = event_ref
+    elif event_type in {"captain_hold_created", "captain_hold_resolved"}:
+        task_id = payload.get("task_id")
+        if not isinstance(task_id, str) or not re.fullmatch(r"[A-Za-z0-9._-]+", task_id):
+            raise StoreError("captain hold event requires a valid task_id")
+        hold_id = payload.get("hold_id", task_id + "-captain-hold")
+        if not isinstance(hold_id, str) or not ID_RE.fullmatch(hold_id):
+            raise StoreError("captain hold event requires a valid hold_id")
+        hold = view["captain_holds"].setdefault(hold_id, {
+            "hold_id": hold_id, "task_id": task_id,
+            "backlog_pointer": payload.get("backlog_pointer", "data/backlog.md#" + task_id),
+            "status": "OPEN",
+        })
+        hold["status"] = "OPEN" if event_type.endswith("created") else "RESOLVED"
+    elif event_type == "worktree_created":
+        item = copy.deepcopy(payload); item["event"] = event_ref
+        view["worktrees"].append(item)
+    elif event_type == "commit_produced":
+        task = task_for(view, payload)
+        commit = {key: payload[key] for key in ("sha", "message", "authored_at") if key in payload}
+        commit["event"] = event_ref
+        task["commits"].append(commit); task["last_event"] = event_ref
+    elif event_type == "phase_transition":
+        phase = copy.deepcopy(payload); phase["event"] = event_ref
+        view["phases"].append(phase)
+        if "next_action" in payload:
+            view["next_action"] = payload["next_action"]
+    elif event_type == "supervisor_handoff":
+        item = copy.deepcopy(payload); item["event"] = event_ref
+        view["supervisor_handoffs"].append(item)
+    elif event_type == "supervisor_termination":
+        item = copy.deepcopy(payload); item["event"] = event_ref
+        view["supervisor_termination"] = item; view["status"] = "TERMINATED"
+    view["updated_at"] = record["occurred_at"]
+    view["last_event"] = event_ref
+
+
+def read_json(path):
+    with open(path, encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def parse_delta(raw, base_offset):
+    records = []
+    valid_end = 0
+    for line in raw.splitlines(keepends=True):
+        start = valid_end; valid_end += len(line)
+        if not line.endswith(b"\n"):
+            return records, start, True
+        try:
+            record = json.loads(line.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            if valid_end == len(raw):
+                return records, start, True
+            raise StoreError("malformed non-final event-log line at byte " + str(base_offset + start))
+        validate_record(record, base_offset + start); records.append(record)
+    return records, valid_end, False
+
+
+def materialize(mission_id, emit_warning=True):
+    path = log_path(mission_id)
+    with open(path, "rb") as handle:
+        raw = handle.read()
+    records, prefix, torn = [], b"", False
+    view = new_view(mission_id)
+    cursor = None
+    if os.path.exists(cursor_path(mission_id)) and os.path.exists(view_path(mission_id)):
+        try:
+            candidate_cursor = read_json(cursor_path(mission_id))
+            candidate_view = read_json(view_path(mission_id))
+            stat = os.stat(path)
+            same_file = (candidate_cursor.get("device") == stat.st_dev and candidate_cursor.get("inode") == stat.st_ino)
+            offset = candidate_cursor.get("offset")
+            if (candidate_cursor.get("schema_version") == 1 and same_file and isinstance(offset, int)
+                    and 0 <= offset <= len(raw) and candidate_view.get("schema_version") == VIEW_SCHEMA_VERSION):
+                view = candidate_view; tail = raw[offset:]
+                records, delta_end, delta_torn = parse_delta(tail, offset)
+                prefix = raw[:offset + delta_end]; torn = delta_torn
+                cursor = candidate_cursor
+        except (OSError, ValueError, KeyError, json.JSONDecodeError, StoreError):
+            cursor = None
+    if cursor is None:
+        view = new_view(mission_id); records, prefix, torn = load_log(mission_id)
+    for record in records:
+        apply_event(view, record)
+    if torn and emit_warning:
+        print("warning: discarded malformed final event-log line for " + mission_id, file=sys.stderr)
+    stat = os.stat(path)
+    atomic_write(cursor_path(mission_id), json.dumps({
+        "schema_version": 1, "offset": len(prefix), "device": stat.st_dev,
+        "inode": stat.st_ino, "last_sequence": view["last_event"]["sequence"] if view["last_event"] else 0,
+    }, indent=2) + "\n")
+    atomic_write(view_path(mission_id), json.dumps(view, indent=2) + "\n")
+    return view
+
+
+def append_event(mission_id, event_id, event_type, payload, occurred_at=None):
+    require_event_id(event_id); validate_event_type(event_type)
+    if not isinstance(payload, dict):
+        raise StoreError("event payload must be a JSON object")
+    validate_payload(event_type, payload)
+    records, prefix, _ = load_log(mission_id)
+    for record in records:
+        if record["event_id"] == event_id:
+            if record["type"] != event_type or record["payload"] != payload:
+                raise StoreError("event id is reused with different content: " + event_id)
+            return record, False
+    record = {"schema_version": EVENT_SCHEMA_VERSION, "event_id": event_id,
+              "sequence": len(records) + 1, "occurred_at": occurred_at or now_utc(),
+              "type": event_type, "payload": payload}
+    encoded = (json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+    atomic_write(log_path(mission_id), prefix + encoded)
+    return record, True
+
+
+def write_capsule(view):
+    active = next((session for session in reversed(view["sessions"]) if session["status"] == "RUNNING"), None)
+    capsule = {"schema_version": VIEW_SCHEMA_VERSION, "mission_id": view["mission_id"],
+               "intent": view["intent"], "original_prompt_pointer": view["original_prompt"]["file"],
+               "task_graph": view["task_graph"], "next_action": view["next_action"],
+               "active_session": active, "sessions_history": view["sessions"],
+               "tasks": view["tasks"], "captain_holds": view["captain_holds"],
+               "updated_at": view["updated_at"]}
+    text = json.dumps(capsule, indent=2) + "\n"
+    atomic_write(capsule_path(view["mission_id"]), text)
+    atomic_write(os.path.join(state_dir, "mission-capsule.json"), text)
+
+
+def publish_active(mission_id):
+    atomic_write(os.path.join(state_dir, ".active-mission"), mission_id + "\n")
+
+
+def initialize(mission_id, intent, prompt_file, graph_file, next_action, source_transcript, step_index, classification):
+    require_mission_id(mission_id)
+    directory = mission_path(mission_id); os.makedirs(directory, mode=0o700, exist_ok=True)
+    if os.path.exists(log_path(mission_id)):
+        raise StoreError("mission already exists: " + mission_id)
+    if prompt_file:
+        with open(prompt_file, "rb") as handle:
+            prompt = handle.read()
+    else:
+        prompt = ("# Mission " + mission_id + "\n\n" + (intent or "Pending mission intent") + "\n").encode()
+    atomic_write(os.path.join(directory, "original-prompt.md"), prompt)
+    graph = []
+    if graph_file:
+        with open(graph_file, encoding="utf-8") as handle:
+            graph = json.load(handle)
+        if not isinstance(graph, (list, dict)):
+            raise StoreError("task graph must be a JSON array or object")
+    classification = classification or "EXACT_RECOVERED"
+    if classification not in {"EXACT_RECOVERED", "RECONSTRUCTED", "SUMMARIZED"}:
+        raise StoreError("invalid original prompt classification")
+    prompt_pointer = "data/missions/%s/original-prompt.md" % mission_id
+    original_prompt = {"file": prompt_pointer, "sha256": hashlib.sha256(prompt).hexdigest(),
+                       "source_transcript": source_transcript or None,
+                       "step_index": int(step_index) if step_index else None,
+                       "classification": classification}
+    append_event(mission_id, "mission-created:" + mission_id, "mission_created", {
+        "mission_id": mission_id, "intent": intent or "Mission " + mission_id,
+        "original_prompt": original_prompt, "task_graph": graph,
+        "next_action": next_action or "Continue the active mission"})
+    view = materialize(mission_id); write_capsule(view); publish_active(mission_id)
+    print(mission_id)
+
+
+def session_start(mission_id, harness, session_id):
+    require_mission_id(mission_id); materialize(mission_id, emit_warning=False)
+    append_event(mission_id, "session-started:" + session_id, "session_started",
+                 {"session_id": session_id, "harness": harness})
+    view = materialize(mission_id); write_capsule(view); publish_active(mission_id)
+    print(session_id)
+
+
+def session_end(mission_id, reason):
+    require_mission_id(mission_id); view = materialize(mission_id, emit_warning=False)
+    session = next((item for item in reversed(view["sessions"]) if item["status"] == "RUNNING"), None)
+    if session is None:
+        raise StoreError("mission has no running session")
+    append_event(mission_id, "session-ended:" + session["session_id"], "session_ended",
+                 {"session_id": session["session_id"], "reason": reason})
+    view = materialize(mission_id); write_capsule(view)
+
+
+def append_operation(mission_id, event_id, event_type, payload_text, payload_file, occurred_at):
+    require_mission_id(mission_id)
+    if payload_file:
+        with open(payload_file, encoding="utf-8") as handle:
+            payload_text = handle.read()
+    payload = parse_json(payload_text or "{}", "event payload")
+    record, created = append_event(mission_id, event_id, event_type, payload, occurred_at)
+    view = materialize(mission_id); write_capsule(view); publish_active(mission_id)
+    print(json.dumps({"event": record, "idempotent_replay": not created}, sort_keys=True))
+
+
+def main():
+    try:
+        if operation == "init":
+            initialize(*args)
+        elif operation == "append":
+            append_operation(*args)
+        elif operation == "session-start":
+            session_start(*args)
+        elif operation == "session-end":
+            session_end(*args)
+        elif operation in {"materialize", "show"}:
+            require_mission_id(args[0]); print(json.dumps(materialize(args[0]), indent=2))
+        elif operation == "capsule":
+            require_mission_id(args[0]); view = materialize(args[0])
+            if len(args) > 1 and args[1]:
+                next_action = args[1]
+                event_id = "phase-next-action:" + hashlib.sha256(next_action.encode()).hexdigest()[:24]
+                append_event(args[0], event_id, "phase_transition", {"next_action": next_action})
+                view = materialize(args[0])
+            write_capsule(view)
+        elif operation == "active":
+            if os.path.isdir(missions_dir):
+                for mission_id in sorted(os.listdir(missions_dir)):
+                    if re.fullmatch(r"[A-Za-z0-9._-]+", mission_id) and not mission_id.startswith("-") and os.path.exists(log_path(mission_id)):
+                        view_file = view_path(mission_id)
+                        try:
+                            view = read_json(view_file)
+                        except (OSError, ValueError, KeyError, json.JSONDecodeError):
+                            continue
+                        if view.get("schema_version") == VIEW_SCHEMA_VERSION and view.get("status") == "ACTIVE":
+                            print(mission_id)
+        else:
+            raise StoreError("unknown operation: " + operation)
+    except (OSError, ValueError, StoreError, KeyError, TypeError) as exc:
+        print("error: " + str(exc), file=sys.stderr); raise SystemExit(1)
+
+
+main()
+PY
+}
 
 cmd_init() {
-  local id="${1-}" intent='' prompt_file='' graph_file='' next_action='' arg
+  local id="${1-}" intent='' prompt_file='' graph_file='' next_action='' source_transcript='' step_index='' classification='' arg
   if [ -z "$id" ] || ! valid_id "$id"; then die 'mission id must contain only letters, digits, dot, underscore, or dash'; fi
   shift
   while [ "$#" -gt 0 ]; do
@@ -37,47 +562,37 @@ cmd_init() {
       --prompt-file) [ "$#" -gt 1 ] || die '--prompt-file requires a path'; prompt_file="$2"; shift 2 ;;
       --task-graph-file) [ "$#" -gt 1 ] || die '--task-graph-file requires a JSON file'; graph_file="$2"; shift 2 ;;
       --next) [ "$#" -gt 1 ] || die '--next requires a value'; next_action="$2"; shift 2 ;;
+      --prompt-source-transcript) [ "$#" -gt 1 ] || die '--prompt-source-transcript requires a path'; source_transcript="$2"; shift 2 ;;
+      --prompt-step-index) [ "$#" -gt 1 ] || die '--prompt-step-index requires a number'; step_index="$2"; shift 2 ;;
+      --prompt-classification) [ "$#" -gt 1 ] || die '--prompt-classification requires a value'; classification="$2"; shift 2 ;;
       *) die "unknown init option: $arg" ;;
     esac
   done
-  local dir pointer graph_json
-  dir="$(mission_dir "$id")"
-  mkdir -p "$dir" "$STATE_DIR" || die 'could not create mission directories'
-  pointer="data/missions/$id/original-prompt.md"
-  if [ -n "$prompt_file" ]; then
-    [ -f "$prompt_file" ] || die "prompt file not found: $prompt_file"
-    cp -- "$prompt_file" "$dir/original-prompt.md" || die 'could not preserve original prompt'
-  elif [ ! -f "$dir/original-prompt.md" ]; then
-    printf '# Mission %s\n\n%s\n' "$id" "${intent:-Pending mission intent}" >"$dir/original-prompt.md" || die 'could not create original prompt'
-  fi
-  graph_json='[]'
-  if [ -n "$graph_file" ]; then
-    [ -f "$graph_file" ] || die "task graph file not found: $graph_file"
-    graph_json="$(cat -- "$graph_file")" || die 'could not read task graph'
-  fi
-  python3 - "$id" "$intent" "$pointer" "$graph_json" "$next_action" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(mission_file "$id")" <<'PY'
-import json, os, sys, tempfile
-mission_id, intent, pointer, graph_text, next_action, now, output = sys.argv[1:]
-try:
-    graph = json.loads(graph_text)
-except json.JSONDecodeError as exc:
-    raise SystemExit(f"invalid task graph JSON: {exc}")
-if not isinstance(graph, (list, dict)):
-    raise SystemExit("task graph must be a JSON array or object")
-data = {"schema_version": 2, "mission_id": mission_id, "created_at": now,
-        "updated_at": now, "status": "ACTIVE", "intent": intent or f"Mission {mission_id}",
-        "original_prompt_pointer": pointer, "task_graph": graph,
-        "next_action": next_action or "Continue the active mission",
-        "current_session_id": None, "sessions": []}
-os.makedirs(os.path.dirname(output), exist_ok=True)
-fd, temp = tempfile.mkstemp(prefix=".mission-", dir=os.path.dirname(output), text=True)
-os.fchmod(fd, 0o600)
-with os.fdopen(fd, "w") as handle:
-    json.dump(data, handle, indent=2); handle.write("\n")
-os.replace(temp, output)
-PY
-  printf '%s\n' "$id" >"$STATE_DIR/.active-mission" || die 'could not publish active mission'
-  cmd_capsule "$id" --next "$next_action"
+  mkdir -p "$(mission_dir "$id")" "$STATE_DIR" || die 'could not create mission directories'
+  acquire_mission_lock "$id"
+  run_store init "$id" "$intent" "$prompt_file" "$graph_file" "$next_action" "$source_transcript" "$step_index" "$classification"
+}
+
+cmd_append() {
+  local id="${1-}" event_id='' event_type='' payload='' payload_file='' occurred_at='' arg
+  if [ -z "$id" ] || ! valid_id "$id"; then die 'mission id is required'; fi
+  shift
+  while [ "$#" -gt 0 ]; do
+    arg="$1"
+    case "$arg" in
+      --event-id) [ "$#" -gt 1 ] || die '--event-id requires a value'; event_id="$2"; shift 2 ;;
+      --type) [ "$#" -gt 1 ] || die '--type requires a value'; event_type="$2"; shift 2 ;;
+      --payload) [ "$#" -gt 1 ] || die '--payload requires a value'; payload="$2"; shift 2 ;;
+      --payload-file) [ "$#" -gt 1 ] || die '--payload-file requires a path'; payload_file="$2"; shift 2 ;;
+      --occurred-at) [ "$#" -gt 1 ] || die '--occurred-at requires a value'; occurred_at="$2"; shift 2 ;;
+      *) die "unknown append option: $arg" ;;
+    esac
+  done
+  [ -n "$event_id" ] || die '--event-id is required'; [ -n "$event_type" ] || die '--type is required'
+  [ -z "$payload" ] || [ -z "$payload_file" ] || die 'choose only one payload source'
+  [ -d "$(mission_dir "$id")" ] || die "mission not found: $id"
+  acquire_mission_lock "$id"
+  run_store append "$id" "$event_id" "$event_type" "$payload" "$payload_file" "$occurred_at"
 }
 
 cmd_session_start() {
@@ -92,32 +607,9 @@ cmd_session_start() {
       *) die "unknown session-start option: $arg" ;;
     esac
   done
-  [ -n "$harness" ] || die '--harness is required'
-  [ -n "$session_id" ] || session_id="session-$(date -u +%Y%m%dT%H%M%S)-${BASHPID:-$$}"
-  local file
-  file="$(mission_file "$id")"
-  [ -f "$file" ] || die "mission not found: $id"
-  python3 - "$file" "$harness" "$session_id" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" <<'PY'
-import json, os, sys, tempfile
-file, harness, session_id, now = sys.argv[1:]
-with open(file) as handle:
-    data = json.load(handle)
-for item in data.get("sessions", []):
-    if item.get("status") == "RUNNING":
-        item.update(status="ENDED", ended_at=now, end_reason="SUPERSEDED")
-item = {"session_id": session_id, "harness": harness, "started_at": now,
-        "ended_at": None, "status": "RUNNING", "end_reason": None}
-data.setdefault("sessions", []).append(item)
-data["current_session_id"] = session_id
-data["updated_at"] = now
-fd, temp = tempfile.mkstemp(prefix=".mission-", dir=os.path.dirname(file), text=True)
-os.fchmod(fd, 0o600)
-with os.fdopen(fd, "w") as handle:
-    json.dump(data, handle, indent=2); handle.write("\n")
-os.replace(temp, file)
-PY
-  printf '%s\n' "$id" >"$STATE_DIR/.active-mission" || die 'could not publish active mission'
-  cmd_capsule "$id"
+  [ -n "$harness" ] || die '--harness is required'; [ -n "$session_id" ] || session_id="session-$(date -u +%Y%m%dT%H%M%S)-${BASHPID:-$$}"
+  [ -d "$(mission_dir "$id")" ] || die "mission not found: $id"
+  acquire_mission_lock "$id"; run_store session-start "$id" "$harness" "$session_id"
 }
 
 cmd_session_end() {
@@ -131,27 +623,16 @@ cmd_session_end() {
       *) die "unknown session-end option: $arg" ;;
     esac
   done
-  [ -n "$reason" ] || die '--reason requires a non-empty value'
-  local file
-  file="$(mission_file "$id")"
-  [ -f "$file" ] || die "mission not found: $id"
-  python3 - "$file" "$reason" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" <<'PY'
-import json, os, sys, tempfile
-file, reason, now = sys.argv[1:]
-with open(file) as handle:
-    data = json.load(handle)
-current = next((item for item in reversed(data.get("sessions", []))
-                if item.get("status") == "RUNNING"), None)
-if current is not None:
-    current.update(status="ENDED", ended_at=now, end_reason=reason)
-data["updated_at"] = now
-fd, temp = tempfile.mkstemp(prefix=".mission-", dir=os.path.dirname(file), text=True)
-os.fchmod(fd, 0o600)
-with os.fdopen(fd, "w") as handle:
-    json.dump(data, handle, indent=2); handle.write("\n")
-os.replace(temp, file)
-PY
-  cmd_capsule "$id"
+  [ -n "$reason" ] || die '--reason requires a non-empty value'; [ -d "$(mission_dir "$id")" ] || die "mission not found: $id"
+  acquire_mission_lock "$id"; run_store session-end "$id" "$reason"
+}
+
+cmd_read() {
+  local operation=$1 id=${2-}
+  if [ "$operation" = active ]; then run_store active; return; fi
+  if [ -z "$id" ] || ! valid_id "$id"; then die 'mission id is required'; fi
+  [ -d "$(mission_dir "$id")" ] || die "mission not found: $id"
+  acquire_mission_lock "$id"; run_store "$operation" "$id"
 }
 
 cmd_capsule() {
@@ -165,58 +646,18 @@ cmd_capsule() {
       *) die "unknown capsule option: $arg" ;;
     esac
   done
-  local file dir
-  file="$(mission_file "$id")"
-  dir="$(mission_dir "$id")"
-  [ -f "$file" ] || die "mission not found: $id"
-  python3 - "$file" "$dir/capsule.json" "$STATE_DIR/mission-capsule.json" "$next_action" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" <<'PY'
-import json, os, sys, tempfile
-file, mission_output, state_output, next_action, now = sys.argv[1:]
-with open(file) as handle:
-    data = json.load(handle)
-if next_action:
-    data["next_action"] = next_action
-    data["updated_at"] = now
-    fd, temp = tempfile.mkstemp(prefix=".mission-", dir=os.path.dirname(file), text=True)
-    os.fchmod(fd, 0o600)
-    with os.fdopen(fd, "w") as handle:
-        json.dump(data, handle, indent=2); handle.write("\n")
-    os.replace(temp, file)
-capsule = {"schema_version": 2, "mission_id": data["mission_id"], "intent": data["intent"],
-           "original_prompt_pointer": data["original_prompt_pointer"],
-           "task_graph": data.get("task_graph", []), "next_action": data.get("next_action"),
-           "active_session": next((item for item in reversed(data.get("sessions", []))
-                                   if item.get("status") == "RUNNING"), None),
-           "sessions_history": data.get("sessions", []),
-           "updated_at": data.get("updated_at", now)}
-for output in (mission_output, state_output):
-    os.makedirs(os.path.dirname(output), exist_ok=True)
-    fd, temp = tempfile.mkstemp(prefix=".capsule-", dir=os.path.dirname(output), text=True)
-    os.fchmod(fd, 0o600)
-    with os.fdopen(fd, "w") as handle:
-        json.dump(capsule, handle, indent=2); handle.write("\n")
-    os.replace(temp, output)
-PY
-}
-
-cmd_show() {
-  local id="${1-}" file
-  if [ -z "$id" ] || ! valid_id "$id"; then die 'mission id is required'; fi
-  file="$(mission_dir "$id")/capsule.json"
-  [ -f "$file" ] || die "capsule not found: $id"
-  python3 - "$file" <<'PY'
-import json, sys
-with open(sys.argv[1]) as handle:
-    print(json.dumps(json.load(handle), indent=2))
-PY
+  [ -d "$(mission_dir "$id")" ] || die "mission not found: $id"; acquire_mission_lock "$id"
+  run_store capsule "$id" "$next_action"
 }
 
 case "${1-}" in
   init) shift; cmd_init "$@" ;;
+  append) shift; cmd_append "$@" ;;
   session-start) shift; cmd_session_start "$@" ;;
   session-end) shift; cmd_session_end "$@" ;;
+  materialize|show) cmd_read "$1" "${2-}" ;;
   capsule) shift; cmd_capsule "$@" ;;
-  show) shift; cmd_show "$@" ;;
+  active) cmd_read active ;;
   ''|-h|--help|help) usage ;;
   *) usage >&2; exit 2 ;;
 esac
