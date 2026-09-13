@@ -86,7 +86,12 @@ test("Supervisor B rehydrates the mission after A is killed", async (t) => {
     rmSync(home, { recursive: true, force: true });
   });
 
-  await waitFor("Supervisor A to dispatch and record progress", () => existsSync(path.join(state, "supervisor-a-ready")));
+  await waitFor("Supervisor A to dispatch and record progress", () => {
+    if (existsSync(path.join(state, "supervisor-a-error"))) {
+      throw new Error(readFileSync(path.join(state, "supervisor-a-error"), "utf8"));
+    }
+    return existsSync(path.join(state, "supervisor-a-ready"));
+  });
   const dispatch = JSON.parse(readFileSync(path.join(state, "dispatch-result.json"), "utf8"));
   assert.equal(dispatch.dispatched, true);
   assert.equal(dispatch.routeId, "codex:gpt-5.6-terra:medium");

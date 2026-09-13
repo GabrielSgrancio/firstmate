@@ -9,6 +9,15 @@ const state = path.join(home, "state");
 const data = path.join(home, "data");
 const project = path.join(home, "project");
 const worktree = path.join(home, "task-worktree");
+const startupError = path.join(state, "supervisor-a-error");
+process.on("uncaughtException", (error) => {
+  writeFileSync(startupError, String(error.stack || error));
+  process.exit(1);
+});
+process.on("unhandledRejection", (error) => {
+  writeFileSync(startupError, String(error?.stack || error));
+  process.exit(1);
+});
 const { executeVerb } = await import(path.join(root, "bin", "fm-orchestrator-api.mjs"));
 
 function run(args) {
