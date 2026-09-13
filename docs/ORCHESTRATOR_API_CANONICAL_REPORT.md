@@ -20,10 +20,14 @@ The API does not create or mutate task intake, backlog, lease, worktree, hold, o
 
 Deterministic tests reuse `tests/fixtures/router-v2/` through `makeRouterFixtureHome()` and cover the MCP surface, read-only verbs, fail-closed data classification, Router-selected dispatch, Herdr arguments, and rejection of concrete-target overrides.
 
-Validation passed in an independent fresh clone of the committed branch with:
+The implementation was committed on branch `fm/orchestrator-api-governed-dispatch` at `661412112af4e2b22345c46ae095e878ac15831f`.
+
+Validation passed in a fresh `git clone --no-local --branch fm/orchestrator-api-governed-dispatch` at that exact commit with:
 
 `node tests/fm-router-v2-enforcement.test.mjs`
 
 `node tests/fm-orchestrator-api.test.mjs`
+
+The clean clone reported `tracked_router_fixture_files=10` from `git ls-files 'tests/fixtures/router-v2/**'` and both suites passed.
 
 The branch is local-only and was not pushed or merged.
