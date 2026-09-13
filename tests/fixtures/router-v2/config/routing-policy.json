@@ -1,0 +1,5 @@
+{
+  "version": 3,
+  "canonical_roles": ["fast_precise", "cheap_tool_worker", "strong_cheap_worker", "general_engineer", "fast_context", "deep_context", "autonomous_engineer", "deep_engineer", "architect_synthesizer", "critical_auditor"],
+  "champion_challenger_strategy": {"exploration_eligible_roles": [], "challenger_traffic_fraction": 0}
+}

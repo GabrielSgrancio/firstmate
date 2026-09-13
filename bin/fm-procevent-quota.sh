@@ -118,21 +118,24 @@ condition_status() {
       ($availability | map(select(.status == "known"))) as $known |
       if ($availability | length) == 0 then "error"
       elif any($availability[]; (.runway.status // "") == "exhausted_now") then "exhausted"
-      elif ($known | length) == 0 then "healthy"
+      elif ($known | length) == 0 then "unknown"
+      elif any($known[]; .effectivePercentRemaining <= 0) then "exhausted"
       elif any($known[]; .effectivePercentRemaining < ($threshold | tonumber)) then "low"
       else "healthy"
       end;
     if (.providers | type) != "array" then "error"
     elif $provider == "" then
-      if (.providers | length) == 0 then "healthy"
-      elif ([.providers[]?.quotaSemantics.effectiveAvailability[]?] | length) == 0 then "healthy"
+      if (.providers | length) == 0 then "unknown"
+      elif ([.providers[]?.quotaSemantics.effectiveAvailability[]?] | length) == 0 then "unknown"
       else classify([.providers[]?.quotaSemantics.effectiveAvailability[]?])
       end
     else
       ([.providers[]? | select(.provider == $provider)] | first) as $p |
       if ($p // null) == null then "error"
-      elif ($p.quotaSemantics.effectiveAvailability | length) == 0 and
-           ($p.quotaSemantics.status == "unknown" or $p.quotaSemantics.status == "partial") then "healthy"
+      elif ($p.state.status // "") == "auth_required" or ($p.state.status // "") == "error" then "error"
+      elif ($p.state.status // "") == "stale" or ($p.state.stale // false) then "unknown"
+      elif ($p.quotaSemantics.status // "") == "unknown" then "unknown"
+      elif ($p.quotaSemantics.effectiveAvailability | length) == 0 then "unknown"
       else classify($p.quotaSemantics.effectiveAvailability // [])
       end
     end
@@ -146,9 +149,10 @@ details() {
   printf '%s\n' "$json" | jq -c --arg provider "$provider" '
     def best_detail($availability):
       ($availability | map(select(.status == "known"))) as $known |
-      ($availability | map(select((.runway.status // "") == "exhausted_now"))) as $exhausted |
-      if ($exhausted | length) > 0 then ($exhausted | min_by(.effectivePercentRemaining // 101))
+      if ($availability | map(select((.runway.status // "") == "exhausted_now")) | length) > 0 then
+        ($availability | map(select((.runway.status // "") == "exhausted_now")) | min_by(.effectivePercentRemaining // 101))
       elif ($known | length) > 0 then ($known | min_by(.effectivePercentRemaining))
+      elif ($availability | length) > 0 then ($availability | first)
       else null
       end;
     if $provider == "" then
@@ -218,7 +222,7 @@ cmd_poll() {
   valid_percent "$threshold" || die "--threshold needs a percent 0-100"
   [ -z "$timeout" ] || positive_int "$timeout" || die "--timeout needs a positive integer"
   resolve_provider "$PROVIDER"
-  local json detail status polls=0
+  local json detail status polls=0 unknown_polls=0 max_unknown=${FM_QUOTA_MAX_UNKNOWN:-2}
   while :; do
     polls=$((polls + 1))
     if ! json=$(quota_json "${timeout:-}"); then
@@ -230,7 +234,18 @@ cmd_poll() {
     fi
     status=$(condition_status "$json" "$PROVIDER" "$threshold")
     case "$status" in
-      healthy) sleep "$interval"; continue ;;
+      healthy)
+        unknown_polls=0
+        sleep "$interval"
+        continue
+        ;;
+      unknown)
+        unknown_polls=$((unknown_polls + 1))
+        if [ "$unknown_polls" -lt "$max_unknown" ]; then
+          sleep "$interval"
+          continue
+        fi
+        ;;
       low|exhausted) : ;;
       *) status=error ;;
     esac

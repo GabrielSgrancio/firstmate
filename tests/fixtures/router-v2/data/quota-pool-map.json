@@ -1,0 +1,13 @@
+{
+  "version": 5,
+  "fixture": "synthetic-router-v2",
+  "pools": {
+    "codex_plus":{"scarcity_state":"ABUNDANT","status":"HEALTHY","windows":{"rolling_5h":{"percent_remaining":100}}},
+    "claude_pro":{"scarcity_state":"ABUNDANT","status":"HEALTHY","windows":{"seven_day":{"percent_remaining":100}}},
+    "claude_pro_credits":{"scarcity_state":"UNKNOWN","status":"UNKNOWN"},
+    "antigravity_gemini":{"scarcity_state":"ABUNDANT","status":"HEALTHY","windows":{"weekly":{"percent_remaining":100}}},
+    "antigravity_3p":{"scarcity_state":"ABUNDANT","status":"HEALTHY","windows":{"weekly":{"percent_remaining":100}}},
+    "opencode_go":{"scarcity_state":"ABUNDANT","status":"HEALTHY","quota_cost":"metered_allowance","cash_marginal_cost":0,"windows":{"rolling_5h":{"percent_remaining":100},"weekly":{"percent_remaining":100},"monthly":{"percent_remaining":100}},"model_burn_evidence":{"observed_effective_route_burn_ratio":{"value":12.48,"evidence_type":"controlled_route_probe","confounders":[]},"intrinsic_model_burn_ratio":{"value":null,"status":"UNKNOWN"}}},
+    "opencode_go_qwen38_flash":{"scarcity_state":"ABUNDANT","quota_cost":"metered_allowance","cash_marginal_cost":0}
+  }
+}

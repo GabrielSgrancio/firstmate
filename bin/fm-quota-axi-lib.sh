@@ -46,7 +46,7 @@ fm_quota_json_valid() {
     length == 1 and
     (.[0] | type) == "object" and
     (.[0] |
-      .schemaVersion == 5 and
+      (.schemaVersion == 3 or .schemaVersion == 5) and
       (.providers | type) == "array" and
       (([.providers[].provider] | length) == ([.providers[].provider] | unique | length)) and
       all(.providers[];

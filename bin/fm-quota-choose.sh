@@ -114,7 +114,7 @@ if printf '%s\n' "$QUOTA_SNAPSHOT" | jq -e 'type == "object"' >/dev/null 2>&1; t
   QUOTA_JSON=$QUOTA_SNAPSHOT
   schema=$(printf '%s\n' "$QUOTA_JSON" | jq -r '.schemaVersion // empty' 2>/dev/null) || schema=
   case "$schema" in
-    5) ;;
+    3|5) ;;
     '') die "quota-axi json missing schemaVersion" ;;
     *) die "unsupported quota-axi schema version: $schema" ;;
   esac

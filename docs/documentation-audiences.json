@@ -381,6 +381,10 @@
       "audience": "maintainer-architecture"
     },
     {
+      "path": "docs/router-v2.md",
+      "audience": "maintainer-architecture"
+    },
+    {
       "path": "docs/scripts.md",
       "audience": "operator-current"
     },

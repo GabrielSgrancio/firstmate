@@ -1,0 +1,18 @@
+{
+  "version": 3,
+  "priors": {
+    "gpt-5.6-luna":{"recommended_roles":["fast_precise","cheap_tool_worker"]},
+    "qwen3.8-flash":{"recommended_roles":["cheap_tool_worker"]},
+    "qwen3.7-max":{"recommended_roles":["strong_cheap_worker","general_engineer"]},
+    "muse-spark-1.3-contributor":{"recommended_roles":["strong_cheap_worker"]},
+    "gpt-5.6-terra":{"recommended_roles":["general_engineer","autonomous_engineer"]},
+    "gemini-3.8-flash":{"recommended_roles":["fast_context"]},
+    "gemini-3.1-pro":{"recommended_roles":["fast_context","deep_context"]},
+    "kimi-k3":{"recommended_roles":["deep_context"]},
+    "claude-sonnet-5":{"recommended_roles":["autonomous_engineer"]},
+    "claude-opus-5":{"recommended_roles":["deep_engineer","architect_synthesizer","critical_auditor"]},
+    "gpt-5.6-sol":{"recommended_roles":["deep_engineer","architect_synthesizer","critical_auditor"]},
+    "claude-fable-5-1":{"recommended_roles":["architect_synthesizer"]},
+    "qwen3.7-plus":{"recommended_roles":["strong_cheap_worker"]}
+  }
+}

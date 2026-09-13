@@ -1,0 +1,14 @@
+{
+  "version": 2,
+  "data_classes": {
+    "PUBLIC": {}, "SYNTHETIC": {}, "SANITIZED": {}, "PERSONAL_PRIVATE": {}, "SHARED_TRAMPOLIM": {},
+    "WORK_CORPORATE": {"fail_closed": true}, "SECRET": {"fail_closed": true}
+  },
+  "live_route_profiles": {
+    "codex_consumer":{"allowed_data_classes":["PUBLIC","SYNTHETIC","SANITIZED"]},
+    "claude_consumer":{"allowed_data_classes":["PUBLIC","SYNTHETIC","SANITIZED","PERSONAL_PRIVATE","SHARED_TRAMPOLIM"]},
+    "gemini_consumer":{"allowed_data_classes":["PUBLIC","SYNTHETIC","SANITIZED"]},
+    "opencode_go":{"allowed_data_classes":["PUBLIC","SYNTHETIC","SANITIZED"]},
+    "opencode_go_cn":{"allowed_data_classes":["PUBLIC","SYNTHETIC","SANITIZED"]}
+  }
+}

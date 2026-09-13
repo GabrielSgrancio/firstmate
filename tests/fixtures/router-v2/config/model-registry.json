@@ -1,0 +1,34 @@
+{
+  "version": 3,
+  "canonical_roles": ["fast_precise", "cheap_tool_worker", "strong_cheap_worker", "general_engineer", "fast_context", "deep_context", "autonomous_engineer", "deep_engineer", "architect_synthesizer", "critical_auditor"],
+  "models": {
+    "gpt-5.6-luna": {"harness":"codex","data_profile":"codex_consumer"},
+    "qwen3.8-flash": {"harness":"opencode","data_profile":"opencode_go"},
+    "qwen3.7-max": {"harness":"opencode","data_profile":"opencode_go"},
+    "muse-spark-1.3-contributor": {"harness":"opencode","data_profile":"opencode_go"},
+    "gpt-5.6-terra": {"harness":"codex","data_profile":"codex_consumer"},
+    "gemini-3.8-flash": {"harness":"antigravity","data_profile":"gemini_consumer"},
+    "gemini-3.1-pro": {"harness":"antigravity","data_profile":"gemini_consumer"},
+    "kimi-k3": {"harness":"opencode","data_profile":"opencode_go_cn"},
+    "claude-sonnet-5": {"harness":"claude","data_profile":"claude_consumer"},
+    "claude-sonnet-4-6": {"harness":"claude","data_profile":"claude_consumer"},
+    "claude-opus-5": {"harness":"claude","data_profile":"claude_consumer"},
+    "gpt-5.6-sol": {"harness":"codex","data_profile":"codex_consumer"},
+    "claude-fable-5-1": {"harness":"claude","data_profile":"claude_consumer","availability_tested":false,"test_outcome":"credits_required_org_disabled"},
+    "deepseek-v4-flash": {"harness":"opencode","data_profile":"opencode_go_cn"},
+    "gemini-3.7-flash": {"harness":"antigravity","data_profile":"gemini_consumer"},
+    "qwen3.7-plus": {"harness":"opencode","data_profile":"opencode_go"}
+  },
+  "roles": {
+    "fast_precise":{"primary_champion":"gpt-5.6-luna","challengers":["qwen3.8-flash"]},
+    "cheap_tool_worker":{"primary_champion":"qwen3.8-flash","challengers":["gpt-5.6-luna"]},
+    "strong_cheap_worker":{"primary_champion":"qwen3.7-max","challengers":["muse-spark-1.3-contributor"]},
+    "general_engineer":{"primary_champion":"gpt-5.6-terra","challengers":["qwen3.7-max"]},
+    "fast_context":{"primary_champion":"gemini-3.8-flash","challengers":["gemini-3.1-pro"]},
+    "deep_context":{"primary_champion":"kimi-k3","challengers":["gemini-3.1-pro"]},
+    "autonomous_engineer":{"primary_champion":"claude-sonnet-5","challengers":["gpt-5.6-terra"]},
+    "deep_engineer":{"primary_champion":"gpt-5.6-sol","challengers":["claude-opus-5"]},
+    "architect_synthesizer":{"primary_champion":"claude-opus-5","challengers":["gpt-5.6-sol","claude-fable-5-1"]},
+    "critical_auditor":{"primary_champion":"claude-opus-5","challengers":["gpt-5.6-sol"]}
+  }
+}
