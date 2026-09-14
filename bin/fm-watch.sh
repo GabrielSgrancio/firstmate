@@ -856,8 +856,17 @@ clear_write_tracking() {  # <window-key>
 # The worktree write probe runs ONLY here, inside the at-threshold branch that is
 # about to escalate: at most one bounded walk per window per STALE_ESCALATE_SECS,
 # never per poll.
+# The open-captain-call check runs at that same rare cadence, right before the
+# walk: a task's pane hash never changes once its harness has died, so without
+# this check every poll after the first would fall straight through to plain
+# escalation - status_is_paused_or_captain_held only reads a status line the
+# crew itself wrote, and a firstmate-applied backlog hold (bin/fm-captain-hold.sh
+# hold) leaves no such line, so it is invisible to that predicate on every
+# repeat sighting of the same hash. captain_call_stale_bound is the one
+# predicate that also reads the backlog record, and its own throttle keeps
+# this from re-escalating a task the captain is already holding.
 wedge_timer_check() {  # <window> <since-file> <triage-label> <escalation-count-file> <task>
-  local win=$1 since_file=$2 label=$3 escalation_file=$4 task=$5 since age n reason
+  local win=$1 since_file=$2 label=$3 escalation_file=$4 task=$5 since age n reason key
   since=$(cat "$since_file" 2>/dev/null || true)
   case "$since" in
     ''|*[!0-9]*)
@@ -870,6 +879,19 @@ wedge_timer_check() {  # <window> <since-file> <triage-label> <escalation-count-
     *)
       age=$(( $(date +%s) - since ))
       if [ "$age" -ge "$STALE_ESCALATE_SECS" ]; then
+        key=$(window_key "$win")
+        if captain_call_stale_bound "$key" "$task"; then
+          triage_log "absorbed $label (idle ${age}s, open captain call already re-surfaced this window): $win"
+          date +%s > "$since_file"
+          return 0
+        elif [ -n "$STALE_WAIT_DECLARATION" ]; then
+          reason="stale: $win (idle ${age}s, awaiting the captain - open captain call, rechecked on a long cadence not a wedge; answer the held decision or release the hold)"
+          fm_wake_append stale "$win" "$reason" || exit 1
+          stale_wait_record "$key"
+          date +%s > "$since_file"
+          wake "$reason"
+          return 0
+        fi
         if crew_worktree_written_since "$task" "$STATE" "$since_file"; then
           wedge_defer_writing "$win" "$since_file" "$label" "$age"
           return 0

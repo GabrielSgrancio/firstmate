@@ -2623,6 +2623,122 @@ test_reheld_captain_call_starts_its_own_resurface_window() {
   pass "a released-then-re-held task is a distinct captain call whose first sight still alarms"
 }
 
+# --- frozen pane past the wedge threshold, held for the captain: the wedge
+# timer itself must consult the open captain call, not just first sight -------
+# The captain-call bound above (test_open_captain_call_bounds_stale_churn)
+# covers a CHURNING pane, which is re-classified from scratch on every new
+# hash and so always reaches surface_nonterminal_stale's own captain-hold
+# check. A pane that has gone fully quiet - the 2026-09 incident's dead
+# harness executable never rendering again - gets no new hash at all after
+# its first sighting, so every later poll runs wedge_timer_check instead,
+# which had no captain-hold awareness of its own and kept escalating on a
+# bare timer regardless of the open hold. These seed an already-running wedge
+# timer past STALE_ESCALATE_SECS directly, so the threshold is crossed
+# without waiting out the real interval.
+test_open_captain_call_suppresses_frozen_pane_wedge_escalation() {
+  local dir state out capture key text pane_hash since wakes reason
+  command -v tasks-axi >/dev/null 2>&1 \
+    || { echo "skip: tasks-axi not found (frozen-pane wedge suppression)"; return 0; }
+  dir=$(make_hold_home frozen-wedge-held 'working: still tidying the branch' hold) \
+    || fail "could not build a captain-held backlog fixture"
+  state="$dir/state"; out="$dir/watch.out"; capture="$dir/pane.txt"
+  key=$(hold_key)
+  text='idle, frozen forever'
+  printf '%s\n' "$text" > "$capture"
+  pane_hash=$(hash_text "$text")
+  printf '%s' "$pane_hash" > "$state/.hash-$key"
+  printf '2\n' > "$state/.count-$key"
+  printf '%s' "$pane_hash" > "$state/.stale-$key"
+  since=$(( $(date +%s) - 500 ))
+  printf '%s' "$since" > "$state/.stale-since-$key"
+
+  hold_watch_launch "$dir" "$out" "$capture"
+  wait_for_exit "$HOLD_WATCH_PID" 100 \
+    || { reap "$HOLD_WATCH_PID"; fail "a frozen held pane's due wedge check did not surface and exit"; }
+  wakes=$(hold_stale_wakes "$state")
+  [ "$wakes" -eq 1 ] || fail "a due held wedge check produced $wakes wakes instead of one"
+  reason=$(awk -F '\t' '$3 == "stale" && $4 == "test:fm-held-merge" { print; exit }' "$state/.wake-queue")
+  case "$reason" in
+    *"possible wedge"*) fail "a frozen pane under an open captain call was escalated as a possible wedge" ;;
+  esac
+  case "$reason" in
+    *"awaiting the captain"*) : ;;
+    *) fail "a frozen held pane's due check did not name the open captain call: $reason" ;;
+  esac
+  [ ! -s "$state/.wedge-escalations-$key" ] \
+    || fail "a captain-held frozen pane still advanced the wedge-escalation counter"
+  ack_stopped_cycle "$state" || fail "could not acknowledge the held pane's due check"
+
+  # Immediately re-cross the threshold while the hold's own re-surface window
+  # (armed by the check above) is still open: repeated watcher cycles on the
+  # same frozen pane must absorb it, exactly like a churning pane already
+  # does, so a dead pane cannot re-alarm every STALE_ESCALATE_SECS for the
+  # rest of the hold.
+  since=$(( $(date +%s) - 500 ))
+  printf '%s' "$since" > "$state/.stale-since-$key"
+  hold_watch_launch "$dir" "$out" "$capture"
+  wait_poll_cycle "$state" "$HOLD_WATCH_PID" 300 \
+    || { reap "$HOLD_WATCH_PID"; fail "watcher exited re-checking an already-bound held wedge threshold"; }
+  wait_poll_cycle "$state" "$HOLD_WATCH_PID" 300 \
+    || { reap "$HOLD_WATCH_PID"; fail "watcher exited re-checking an already-bound held wedge threshold (second cycle)"; }
+  reap "$HOLD_WATCH_PID"
+  wakes=$(hold_stale_wakes "$state")
+  [ "$wakes" -eq 0 ] \
+    || fail "a re-crossed wedge threshold on a still-held frozen pane re-alarmed $wakes time(s) inside the re-surface window"
+
+  pass "a frozen pane under an open captain call is bounded by the hold, not the raw wedge timer"
+}
+
+# The regression guard: the identical frozen-pane fixture with NO open captain
+# call must keep wedge-escalating exactly as before, so the fix above is
+# scoped to the held case and does not quietly widen into general wedge
+# suppression.
+test_frozen_pane_without_a_captain_call_still_wedge_escalates() {
+  local dir state out capture key text pane_hash since wakes reason
+  command -v tasks-axi >/dev/null 2>&1 \
+    || { echo "skip: tasks-axi not found (frozen-pane wedge regression)"; return 0; }
+  dir=$(make_hold_home frozen-wedge-unheld 'working: still tidying the branch' nohold) \
+    || fail "could not build an unheld backlog fixture"
+  state="$dir/state"; out="$dir/watch.out"; capture="$dir/pane.txt"
+  key=$(hold_key)
+  text='idle, frozen forever'
+  printf '%s\n' "$text" > "$capture"
+  pane_hash=$(hash_text "$text")
+  printf '%s' "$pane_hash" > "$state/.hash-$key"
+  printf '2\n' > "$state/.count-$key"
+  printf '%s' "$pane_hash" > "$state/.stale-$key"
+  since=$(( $(date +%s) - 500 ))
+  printf '%s' "$since" > "$state/.stale-since-$key"
+
+  hold_watch_launch "$dir" "$out" "$capture"
+  wait_for_exit "$HOLD_WATCH_PID" 100 \
+    || { reap "$HOLD_WATCH_PID"; fail "an unheld frozen pane's due wedge check did not surface and exit"; }
+  wakes=$(hold_stale_wakes "$state")
+  [ "$wakes" -eq 1 ] || fail "an unheld due wedge check produced $wakes wakes instead of one"
+  reason=$(awk -F '\t' '$3 == "stale" && $4 == "test:fm-held-merge" { print; exit }' "$state/.wake-queue")
+  case "$reason" in
+    *"possible wedge"*) : ;;
+    *) fail "an unheld frozen pane's due check did not flag a possible wedge: $reason" ;;
+  esac
+  [ "$(cat "$state/.wedge-escalations-$key" 2>/dev/null || echo 0)" -eq 1 ] \
+    || fail "an unheld frozen pane's wedge escalation counter did not advance"
+  ack_stopped_cycle "$state" || fail "could not acknowledge the unheld pane's escalation"
+
+  # A second threshold crossing must escalate again: nothing about this fixture
+  # declares or holds a wait, so it has nothing to bound repetition against.
+  since=$(( $(date +%s) - 500 ))
+  printf '%s' "$since" > "$state/.stale-since-$key"
+  hold_watch_launch "$dir" "$out" "$capture"
+  wait_for_exit "$HOLD_WATCH_PID" 100 \
+    || { reap "$HOLD_WATCH_PID"; fail "an unheld frozen pane stopped escalating on a second crossing"; }
+  wakes=$(hold_stale_wakes "$state")
+  [ "$wakes" -eq 1 ] || fail "the second unheld crossing produced $wakes wakes instead of one"
+  [ "$(cat "$state/.wedge-escalations-$key" 2>/dev/null || echo 0)" -eq 2 ] \
+    || fail "the second unheld crossing did not advance the escalation count to 2"
+
+  pass "a frozen pane with no open captain call keeps wedge-escalating on every threshold crossing"
+}
+
 
 
 test_secondmate_paused_resurfaces_in_normal_mode() {
@@ -4445,6 +4561,8 @@ test_open_captain_call_bounds_stale_churn
 test_stale_churn_without_a_captain_call_still_alarms
 test_failed_wake_append_does_not_arm_the_captain_hold_throttle
 test_reheld_captain_call_starts_its_own_resurface_window
+test_open_captain_call_suppresses_frozen_pane_wedge_escalation
+test_frozen_pane_without_a_captain_call_still_wedge_escalates
 test_secondmate_paused_resurfaces_in_normal_mode
 test_secondmate_captain_held_resurfaces_in_normal_mode
 test_secondmate_nonpaused_stale_remains_suppressed
