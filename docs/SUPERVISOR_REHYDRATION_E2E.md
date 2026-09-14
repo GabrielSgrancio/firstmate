@@ -51,3 +51,30 @@ Run the continuity regression alongside it with:
 ```sh
 node --test tests/fm-supervisor-rehydration-e2e.test.mjs tests/fm-supervisor-failover-e2e.test.mjs
 ```
+
+## Real-harness proof
+
+`tests/fm-supervisor-failover-real-harness-e2e.test.mjs` proves the identical
+mechanism with a real `claude` process as Supervisor A and a real `codex`
+process as Supervisor B, replacing only the harness-endpoint fixtures
+(`supervisor-a-real.mjs`, `supervisor-b-real.sh` under
+`tests/fixtures/supervisor-rehydration/`); the mission bootstrap, dispatch,
+event store, continuity service, and launch adapter are the same real,
+unmocked code this document already covers.
+Supervisor A performs a disposable trivial task (append a fixed marker line to
+a file in the preserved worktree) for real, then blocks on a bounded `sleep`
+tool call so the test can kill it mid-flight with a live process on record.
+Supervisor B receives only the delivered resume context, resolves the
+original-prompt pointer itself, reads the preserved worktree, and must
+recognize from that alone that the marker is already present rather than
+duplicating it.
+
+This test submits real prompts and spends real provider quota, so it is
+opt-in per the `firstmate-coding-guidelines` "Harness-dependent checks"
+live-guard convention: it is skipped unless `FM_LIVE_SUPERVISOR_REAL_HARNESS_E2E=1`
+(or `FM_LIVE=1`) is set, and a missing `claude` or `codex` binary is a hard
+failure rather than a silent skip once requested.
+
+```sh
+FM_LIVE_SUPERVISOR_REAL_HARNESS_E2E=1 node --test tests/fm-supervisor-failover-real-harness-e2e.test.mjs
+```
