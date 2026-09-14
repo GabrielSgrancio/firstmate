@@ -18,6 +18,35 @@ const QUOTA_MAP_PATH = homePath('data/quota-pool-map.json');
 const LEARNED_ROUTING_PATH = homePath('data/learned-routing.json');
 const EXECUTIONS_LOG_PATH = homePath('data/routing-executions.jsonl');
 const COMPILED_ROUTES_PATH = homePath('data/provider-catalogs/compiled-route-targets.json');
+const OPENCODE_QUOTA_SCRIPT_PATH = path.join(ROOT, 'bin', 'fm-opencode-quota.mjs');
+
+function setPoolWindowsFresh(pool, fresh) {
+  Object.defineProperty(pool, '_windows_fresh', {
+    configurable: true,
+    enumerable: false,
+    value: fresh,
+    writable: true
+  });
+}
+
+function poolWindowsFresh(pool) {
+  return pool?._windows_fresh !== false;
+}
+
+function readOpenCodeGoQuota() {
+  const scriptPath = process.env.FM_OPENCODE_QUOTA_SCRIPT || OPENCODE_QUOTA_SCRIPT_PATH;
+  const output = execFileSync(process.execPath, [scriptPath], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'ignore'],
+    timeout: 10000,
+    env: { ...process.env, FM_HOME }
+  });
+  const quota = JSON.parse(output);
+  if (!quota || typeof quota !== 'object' || Array.isArray(quota)) {
+    throw new Error('OpenCode Go quota output must be an object');
+  }
+  return quota;
+}
 
 function readJson(filePath, label) {
   try {
@@ -186,6 +215,19 @@ export const ROLE_DEFAULT_EFFORT = {
 export function resolveLiveQuotaPools({ quotaOverrides = null, useLiveAxi = true } = {}) {
   const { quotaMap } = loadConfigs();
   const pools = JSON.parse(JSON.stringify(quotaMap.pools || {}));
+  const initialWindowsFresh = quotaMap.generated_state?.stale !== true;
+  for (const pool of Object.values(pools)) {
+    setPoolWindowsFresh(pool, initialWindowsFresh);
+  }
+
+  const deriveScarcity = (pct) => {
+    if (pct === null || pct === undefined || isNaN(pct)) return 'UNKNOWN';
+    if (pct <= 0) return 'EXHAUSTED';
+    if (pct <= 10) return 'CRITICAL';
+    if (pct <= 25) return 'CONSERVE';
+    if (pct <= 50) return 'NORMAL';
+    return 'ABUNDANT';
+  };
 
   if (useLiveAxi && process.env.FM_DISABLE_LIVE_QUOTA !== '1') {
     try {
@@ -196,15 +238,6 @@ export function resolveLiveQuotaPools({ quotaOverrides = null, useLiveAxi = true
       });
       const data = normalizeQuotaAxiSnapshot(JSON.parse(axiOut));
       const providers = data.providers;
-
-      const deriveScarcity = (pct) => {
-        if (pct === null || pct === undefined || isNaN(pct)) return 'UNKNOWN';
-        if (pct <= 0) return 'EXHAUSTED';
-        if (pct <= 10) return 'CRITICAL';
-        if (pct <= 25) return 'CONSERVE';
-        if (pct <= 50) return 'NORMAL';
-        return 'ABUNDANT';
-      };
 
       for (const p of providers) {
         const name = p.provider;
@@ -231,9 +264,11 @@ export function resolveLiveQuotaPools({ quotaOverrides = null, useLiveAxi = true
               pools.codex_plus.scarcity_state = deriveScarcity(rem);
               pools.codex_plus.status = pools.codex_plus.scarcity_state === 'EXHAUSTED' ? 'EXHAUSTED' : 'HEALTHY';
               pools.codex_plus.windows = { ...(pools.codex_plus.windows || {}), ...windowMap };
+              setPoolWindowsFresh(pools.codex_plus, true);
             } else {
               pools.codex_plus.scarcity_state = 'UNKNOWN';
               pools.codex_plus.status = 'UNKNOWN';
+              setPoolWindowsFresh(pools.codex_plus, false);
             }
           }
         } else if (name === 'claude') {
@@ -244,9 +279,11 @@ export function resolveLiveQuotaPools({ quotaOverrides = null, useLiveAxi = true
               pools.claude_pro.scarcity_state = deriveScarcity(rem);
               pools.claude_pro.status = pools.claude_pro.scarcity_state === 'EXHAUSTED' ? 'EXHAUSTED' : 'HEALTHY';
               pools.claude_pro.windows = { ...(pools.claude_pro.windows || {}), ...windowMap };
+              setPoolWindowsFresh(pools.claude_pro, true);
             } else {
               pools.claude_pro.scarcity_state = 'UNKNOWN';
               pools.claude_pro.status = 'UNKNOWN';
+              setPoolWindowsFresh(pools.claude_pro, false);
             }
           }
           if (pools.claude_pro_credits) {
@@ -264,9 +301,11 @@ export function resolveLiveQuotaPools({ quotaOverrides = null, useLiveAxi = true
                 if (k.startsWith('gemini')) geminiWindows[k] = v;
               }
               pools.antigravity_gemini.windows = { ...(pools.antigravity_gemini.windows || {}), ...geminiWindows };
+              setPoolWindowsFresh(pools.antigravity_gemini, true);
             } else {
               pools.antigravity_gemini.scarcity_state = 'UNKNOWN';
               pools.antigravity_gemini.status = 'UNKNOWN';
+              setPoolWindowsFresh(pools.antigravity_gemini, false);
             }
           }
           if (pools.antigravity_3p) {
@@ -280,9 +319,11 @@ export function resolveLiveQuotaPools({ quotaOverrides = null, useLiveAxi = true
                 if (k.startsWith('3p')) p3Windows[k] = v;
               }
               pools.antigravity_3p.windows = { ...(pools.antigravity_3p.windows || {}), ...p3Windows };
+              setPoolWindowsFresh(pools.antigravity_3p, true);
             } else {
               pools.antigravity_3p.scarcity_state = 'UNKNOWN';
               pools.antigravity_3p.status = 'UNKNOWN';
+              setPoolWindowsFresh(pools.antigravity_3p, false);
             }
           }
         }
@@ -291,13 +332,48 @@ export function resolveLiveQuotaPools({ quotaOverrides = null, useLiveAxi = true
       for (const k of Object.keys(pools)) {
         pools[k].scarcity_state = 'UNKNOWN';
         pools[k].status = 'UNKNOWN';
+        setPoolWindowsFresh(pools[k], false);
+      }
+    }
+
+    const openCodePool = pools.opencode_go;
+    if (openCodePool) {
+      try {
+        const usage = readOpenCodeGoQuota();
+        const windowNames = ['rolling_5h', 'weekly', 'monthly'];
+        const hasFreshAuthoritativeWindows = usage.stale !== true &&
+          usage.source === 'opencode_go_usage_api' &&
+          windowNames.every((name) => Number.isFinite(usage[name]?.percent_remaining));
+
+        if (hasFreshAuthoritativeWindows) {
+          const windows = Object.fromEntries(windowNames.map((name) => [name, {
+            percent_remaining: usage[name].percent_remaining,
+            percent_used: usage[name].percent_used,
+            reset_at: usage[name].reset_at
+          }]));
+          const remaining = Math.min(...windowNames.map((name) => usage[name].percent_remaining));
+          openCodePool.windows = windows;
+          openCodePool.scarcity_state = deriveScarcity(remaining);
+          openCodePool.status = openCodePool.scarcity_state === 'EXHAUSTED' ? 'EXHAUSTED' : 'HEALTHY';
+          setPoolWindowsFresh(openCodePool, true);
+        } else {
+          openCodePool.scarcity_state = 'UNKNOWN';
+          openCodePool.status = 'UNKNOWN';
+          setPoolWindowsFresh(openCodePool, false);
+        }
+      } catch (err) {
+        openCodePool.scarcity_state = 'UNKNOWN';
+        openCodePool.status = 'UNKNOWN';
+        setPoolWindowsFresh(openCodePool, false);
       }
     }
   }
 
   if (quotaOverrides) {
     for (const [k, v] of Object.entries(quotaOverrides)) {
+      const previousWindowsFresh = poolWindowsFresh(pools[k]);
       pools[k] = { ...(pools[k] || {}), ...v, _explicit_override: Boolean(v.scarcity_state) };
+      setPoolWindowsFresh(pools[k], Object.prototype.hasOwnProperty.call(v, 'windows') || previousWindowsFresh);
     }
   }
 
@@ -380,7 +456,7 @@ export function scoreAndSelectRoute({ role, dataClass, targetEffort = null, quot
 
     let scarcityState = pool.scarcity_state || 'UNKNOWN';
     // If pool has multi-window subscription quotas and no explicit override, evaluate all windows and pick the most restrictive
-    if (!pool._explicit_override && pool.windows && typeof pool.windows === 'object') {
+    if (!pool._explicit_override && poolWindowsFresh(pool) && pool.windows && typeof pool.windows === 'object') {
       const severityRank = { EXHAUSTED: 6, CRITICAL: 5, CONSERVE: 4, USE_BEFORE_RESET: 3, NORMAL: 2, ABUNDANT: 1, UNKNOWN: 4 };
       let windowSeverity = null;
       for (const wKey of Object.keys(pool.windows)) {

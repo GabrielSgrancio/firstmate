@@ -86,4 +86,53 @@ assert.throws(() => dispatchThroughHerdr({ taskId: 'missing', dataClass: 'UNKNOW
 const compiledPath = path.join(home, 'data', 'provider-catalogs', 'compiled-route-targets.json');
 fs.utimesSync(compiledPath, new Date('2020-01-01T00:00:00Z'), new Date('2020-01-01T00:00:00Z'));
 assert.throws(() => scoreAndSelectRoute({ role: 'general_engineer', dataClass: 'PUBLIC', useLiveAxi: false }), /No viable RouteTargets/);
+
+const quotaMapPath = path.join(home, 'data', 'quota-pool-map.json');
+const quotaMap = JSON.parse(fs.readFileSync(quotaMapPath, 'utf8'));
+delete quotaMap.fixture;
+fs.writeFileSync(quotaMapPath, JSON.stringify(quotaMap));
+
+const quotaTestBin = fs.mkdtempSync(path.join(home, 'quota-test-bin-'));
+const quotaAxiPath = path.join(quotaTestBin, 'quota-axi');
+fs.writeFileSync(quotaAxiPath, '#!/bin/sh\nprintf \'%s\\n\' \'{"schemaVersion":5,"providers":[]}\'\n');
+fs.chmodSync(quotaAxiPath, 0o755);
+
+const openCodeUnavailablePath = path.join(quotaTestBin, 'opencode-unavailable.mjs');
+fs.writeFileSync(openCodeUnavailablePath, 'process.exit(1);\n');
+
+const openCodeFreshPath = path.join(quotaTestBin, 'opencode-fresh.mjs');
+fs.writeFileSync(openCodeFreshPath, `console.log(JSON.stringify({
+  provider: 'opencode_go',
+  pool: 'opencode_go',
+  rolling_5h: { percent_used: 10, percent_remaining: 90, reset_at: '2030-01-01T00:00:00.000Z' },
+  weekly: { percent_used: 60, percent_remaining: 40, reset_at: '2030-01-02T00:00:00.000Z' },
+  monthly: { percent_used: 20, percent_remaining: 80, reset_at: '2030-02-01T00:00:00.000Z' },
+  source: 'opencode_go_usage_api',
+  fetched_at: new Date().toISOString(),
+  stale: false,
+  scarcity_state: 'NORMAL'
+}));\n`);
+
+const originalPath = process.env.PATH;
+const originalLiveQuota = process.env.FM_DISABLE_LIVE_QUOTA;
+process.env.PATH = `${quotaTestBin}:${originalPath}`;
+process.env.FM_DISABLE_LIVE_QUOTA = '0';
+fs.utimesSync(compiledPath, new Date(), new Date());
+
+fs.utimesSync(quotaMapPath, new Date('2020-01-01T00:00:00Z'), new Date('2020-01-01T00:00:00Z'));
+process.env.FM_OPENCODE_QUOTA_SCRIPT = openCodeUnavailablePath;
+const staleUnavailable = scoreAndSelectRoute({ role: 'strong_cheap_worker', dataClass: 'PUBLIC' });
+assert.equal(staleUnavailable.scarcityState, 'UNKNOWN');
+assert.equal(['ABUNDANT', 'NORMAL', 'CONSERVE', 'CRITICAL', 'EXHAUSTED', 'USE_BEFORE_RESET'].includes(staleUnavailable.scarcityState), false);
+
+fs.utimesSync(quotaMapPath, new Date(), new Date());
+process.env.FM_OPENCODE_QUOTA_SCRIPT = openCodeFreshPath;
+const freshOpenCode = scoreAndSelectRoute({ role: 'strong_cheap_worker', dataClass: 'PUBLIC' });
+assert.equal(freshOpenCode.selectedRoute.route_id, 'opencode:qwen3.7-max');
+assert.equal(freshOpenCode.scarcityState, 'NORMAL');
+assert.equal(resolveLiveQuotaPools().opencode_go.windows.weekly.percent_remaining, 40);
+
+process.env.PATH = originalPath;
+process.env.FM_DISABLE_LIVE_QUOTA = originalLiveQuota;
+delete process.env.FM_OPENCODE_QUOTA_SCRIPT;
 console.log('Router V2 enforcement and ten-role regression fixtures passed');
