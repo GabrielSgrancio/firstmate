@@ -8,7 +8,9 @@
  */
 
 import { spawnSync } from "node:child_process";
+import fs from "node:fs";
 import { dirname, resolve } from "node:path";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createInterface } from "node:readline";
 import { dispatchThroughHerdr } from "./fm-router-v2.mjs";
@@ -16,6 +18,53 @@ import { dispatchThroughHerdr } from "./fm-router-v2.mjs";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT_DIR = resolve(__dirname, "..");
 const BIN_DIR = resolve(ROOT_DIR, "bin");
+const HOME_DIR = resolve(process.env.FM_HOME || ROOT_DIR);
+
+function registeredProjectRoots() {
+  const roots = new Set();
+  const add = (candidate) => {
+    try {
+      if (fs.statSync(candidate).isDirectory()) roots.add(fs.realpathSync(candidate));
+    } catch {
+      // A registry entry without a currently cloned project is not trusted.
+    }
+  };
+  add(ROOT_DIR);
+  add(path.join(HOME_DIR, "projects", path.basename(ROOT_DIR)));
+  const registry = path.join(HOME_DIR, "data", "projects.md");
+  if (!fs.existsSync(registry)) return roots;
+  for (const line of fs.readFileSync(registry, "utf8").split(/\r?\n/)) {
+    const match = line.match(/^\s*-\s+(\S+)(?:\s+\[[^\]]+\])?\s+-\s+(.*)$/);
+    if (!match) continue;
+    const [, name, description] = match;
+    add(path.join(HOME_DIR, "projects", name));
+    const pathMention = description.match(/\bat\s+(~\/[^\s(]+|\/[^\s(]+)/);
+    if (pathMention) {
+      const mentioned = pathMention[1].startsWith("~/")
+        ? path.join(process.env.HOME || "", pathMention[1].slice(2))
+        : pathMention[1];
+      add(mentioned);
+    }
+  }
+  return roots;
+}
+
+function resolveDispatchProject(params) {
+  const requested = params.repoPath ?? params.projectDir;
+  if (requested === undefined || requested === null || requested === "") return ROOT_DIR;
+  if (typeof requested !== "string") throw new Error("repoPath must be a project directory path");
+  const candidate = path.resolve(ROOT_DIR, requested);
+  let resolvedCandidate;
+  try {
+    resolvedCandidate = fs.realpathSync(candidate);
+  } catch {
+    throw new Error(`repoPath does not name an existing project directory: ${requested}`);
+  }
+  if (!registeredProjectRoots().has(resolvedCandidate)) {
+    throw new Error(`repoPath is not a registered or trusted project: ${requested}`);
+  }
+  return resolvedCandidate;
+}
 
 export const TOOLS = [
   {
@@ -50,7 +99,9 @@ export const TOOLS = [
         role: { type: "string", description: "Requested canonical role profile." },
         dataClass: { type: "string", description: "Required data classification for Router V2 policy evaluation." },
         effort: { type: "string", description: "Optional requested reasoning effort." },
-        scout: { type: "boolean", description: "Whether to dispatch as a disposable scout (default: true)." }
+        scout: { type: "boolean", description: "Whether to dispatch as a disposable scout (default: true)." },
+        repoPath: { type: "string", description: "Optional registered project directory to dispatch in." },
+        projectDir: { type: "string", description: "Alias for repoPath." }
       },
       required: ["id", "description", "dataClass"]
     }
@@ -240,6 +291,9 @@ export async function executeVerb(verb, params = {}, hooks = {}) {
       if (params.harness || params.model) {
         throw new Error("harness/model overrides are not accepted; Router V2 owns concrete RouteTarget selection");
       }
+      if (params.repoPath && params.projectDir && params.repoPath !== params.projectDir) {
+        throw new Error("repoPath and projectDir must identify the same project when both are provided");
+      }
       const result = dispatchThroughHerdr({
         taskId: params.id,
         role: params.role || "general_engineer",
@@ -248,7 +302,7 @@ export async function executeVerb(verb, params = {}, hooks = {}) {
         intent: params.description,
         spec: params.spec || params.description,
         scout: params.scout !== false,
-        projectDir: ROOT_DIR,
+        projectDir: resolveDispatchProject(params),
         ...(hooks.spawnRunner ? { spawnRunner: hooks.spawnRunner } : {})
       });
       return {

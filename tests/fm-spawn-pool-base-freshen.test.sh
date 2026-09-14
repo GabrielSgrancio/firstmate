@@ -203,6 +203,44 @@ test_stale_pool_base_refreshes_before_branching() {
   pass "a stale pooled worktree refreshes to current origin/main before a crew branch is created"
 }
 
+make_local_only_case() {  # <name> <id>
+  local rec
+  rec=$(make_case "$1" "$2")
+  read_case_record "$rec"
+  printf 'local delivery target\n' > "$PROJECT_DIR/local-main.txt"
+  git -C "$PROJECT_DIR" add local-main.txt
+  git -C "$PROJECT_DIR" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -qm local-main-advance
+  printf '%s\n' "- $(basename "$PROJECT_DIR") [local-only] - fixture (added 2026-09-14)" > "$HOME_DIR/data/projects.md"
+  printf '%s\n' "$CASE_DIR|$HOME_DIR|$PROJECT_DIR|$POOL_DIR|$FAKEBIN_DIR|$INITIAL_SHA|$DEFAULT_BRANCH"
+}
+
+test_local_only_pool_refreshes_to_local_delivery_target() {
+  local rec id out status local_head origin_head
+  id='pool-local-only-target-r1'
+  rec=$(make_local_only_case local-only-target "$id")
+  read_case_record "$rec"
+
+  local_head=$(git -C "$PROJECT_DIR" rev-parse refs/heads/main)
+  origin_head=$(git --git-dir="$CASE_DIR/origin.git" rev-parse refs/heads/main)
+  [ "$local_head" != "$origin_head" ] || fail "fixture did not make local main ahead of origin/main"
+
+  out=$(run_spawn "$id" --mode local-only --yolo off)
+  status=$?
+  expect_code 0 "$status" "a local-only spawn should refresh to local main"$'\n'"$out"
+  assert_contains "$out" "spawned $id" "local-only spawn did not report success"
+  [ "$(git -C "$POOL_DIR" rev-parse HEAD)" = "$local_head" ] \
+    || fail "local-only spawn used origin/main instead of local main"
+  [ -f "$POOL_DIR/local-main.txt" ] \
+    || fail "local-only spawn omitted content from the authoritative local main"
+  [ ! -f "$POOL_DIR/advanced-main.txt" ] \
+    || fail "local-only spawn retained remote-only content instead of local main"
+  assert_grep "base_sha=$local_head" "$HOME_DIR/state/$id.meta" \
+    "local-only spawn did not record the local delivery target head"
+  assert_grep 'target_branch=main' "$HOME_DIR/state/$id.meta" \
+    "local-only spawn did not record the local delivery target branch"
+  pass "a local-only pooled spawn refreshes to the current local delivery target"
+}
+
 test_non_main_default_branch_refreshes_before_branching() {
   local rec id out status current branch_head
   id='pool-current-trunk-r2'
@@ -240,6 +278,37 @@ make_originless_case() {  # <name> <id>
   git -C "$project" worktree add --quiet --detach "$pool" "$initial"
 
   printf '%s\n' "$case_dir|$home|$project|$pool|$fakebin|$initial|main"
+}
+
+make_originless_local_only_case() {  # <name> <id>
+  local rec
+  rec=$(make_originless_case "$1" "$2")
+  read_case_record "$rec"
+  printf 'local delivery target without origin\n' > "$PROJECT_DIR/local-main.txt"
+  git -C "$PROJECT_DIR" add local-main.txt
+  git -C "$PROJECT_DIR" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -qm local-main-advance
+  printf '%s\n' "- $(basename "$PROJECT_DIR") [local-only] - fixture (added 2026-09-14)" > "$HOME_DIR/data/projects.md"
+  printf '%s\n' "$CASE_DIR|$HOME_DIR|$PROJECT_DIR|$POOL_DIR|$FAKEBIN_DIR|$INITIAL_SHA|$DEFAULT_BRANCH"
+}
+
+test_originless_local_only_pool_refreshes_to_local_delivery_target() {
+  local rec id out status local_head
+  id='pool-originless-local-only-r1'
+  rec=$(make_originless_local_only_case originless-local-only "$id")
+  read_case_record "$rec"
+  local_head=$(git -C "$PROJECT_DIR" rev-parse refs/heads/main)
+
+  out=$(run_spawn "$id" --mode local-only --yolo off)
+  status=$?
+  expect_code 0 "$status" "an origin-less local-only spawn should refresh to local main"$'\n'"$out"
+  assert_contains "$out" "spawned $id" "origin-less local-only spawn did not report success"
+  [ "$(git -C "$POOL_DIR" rev-parse HEAD)" = "$local_head" ] \
+    || fail "origin-less local-only spawn silently skipped the local refresh"
+  assert_grep 'local delivery target without origin' "$POOL_DIR/local-main.txt" \
+    "origin-less local-only spawn omitted local-main content"
+  assert_grep "base_sha=$local_head" "$HOME_DIR/state/$id.meta" \
+    "origin-less local-only spawn did not record the local delivery target head"
+  pass "an origin-less local-only pooled spawn refreshes to the current local delivery target"
 }
 
 test_originless_pool_launches_without_a_freshness_fetch() {
@@ -687,12 +756,14 @@ test_stale_pin_beside_other_dirt_reports_one_verdict() {
 test_remote_seeded_home_spawns_from_treehouse_pool
 test_linked_spawning_home_rejects_primary_before_refresh
 test_stale_pool_base_refreshes_before_branching
+test_local_only_pool_refreshes_to_local_delivery_target
 test_non_main_default_branch_refreshes_before_branching
 test_direct_pr_and_scout_refresh_before_launch
 test_dirty_pool_refuses_without_discarding_work
 test_unresolved_remote_default_refuses_pool
 test_unreachable_origin_refuses_stale_pool_base
 test_originless_pool_launches_without_a_freshness_fetch
+test_originless_local_only_pool_refreshes_to_local_delivery_target
 test_originless_dirty_pool_refuses_without_discarding_work
 test_origin_config_without_url_refuses_pool
 test_empty_origin_config_section_refuses_pool

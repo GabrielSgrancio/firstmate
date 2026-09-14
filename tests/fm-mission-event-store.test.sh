@@ -38,7 +38,66 @@ test_original_prompt_and_event_identity() {
     || fail 'duplicate event identity was not idempotent'
   [ "$(wc -l < "$HOME_DIR/data/missions/event-store/events.jsonl")" -eq 2 ] \
     || fail 'idempotent replay appended a second physical event'
+  [ ! -e "$HOME_DIR/state/mission-capsule.json" ] \
+    || fail 'mission capsule compatibility write still creates the last-writer-wins global file'
   pass 'mission_created provenance, ordered records, and idempotent event identity round-trip'
+}
+
+test_legacy_missions_are_migrated_and_discovered() {
+  local dir="$HOME_DIR/data/missions/legacy-recovery" active_before active_after
+  mkdir -p "$dir"
+  cat > "$dir/mission.json" <<'JSON'
+{
+  "schema_version": 1,
+  "mission_id": "legacy-recovery",
+  "created_at": "2026-09-13T02:12:16Z",
+  "updated_at": "2026-09-13T02:12:16Z",
+  "status": "ACTIVE",
+  "intent": "Legacy recovery fixture",
+  "current_session_id": "legacy-session",
+  "sessions": [{"session_id":"legacy-session","harness":"codex","started_at":"2026-09-13T02:12:16Z","ended_at":null,"status":"RUNNING","end_reason":null}],
+  "milestones": []
+}
+JSON
+  cat > "$dir/capsule.json" <<'JSON'
+{
+  "schema_version": 1,
+  "mission_id": "legacy-recovery",
+  "intent": "Legacy recovery fixture",
+  "updated_at": "2026-09-13T02:12:16Z",
+  "completed_tasks_count": 1,
+  "completed_tasks_sample": ["legacy-task - completed fixture"],
+  "in_flight_tasks": [{"task_id":"legacy-live","project":"firstmate","mode":"local-only"}],
+  "preserved_worktrees": [],
+  "pending_tasks_count": 0,
+  "pending_tasks_sample": [],
+  "recommended_next_step": "Resume legacy-live"
+}
+JSON
+  printf 'Legacy recovery prompt.\n' > "$dir/original-prompt.md"
+  active_before=$(mission active) || fail 'active failed while migrating the legacy mission'
+  printf '%s\n' "$active_before" | grep -Fx legacy-recovery >/dev/null \
+    || fail 'migrated legacy mission was not discoverable as active'
+  [ -f "$dir/events.jsonl" ] || fail 'legacy mission migration did not create events.jsonl'
+  jq -s -e 'map(.type) | index("mission_created") and index("session_started") and index("task_completed") and index("task_dispatched") and index("phase_transition")' "$dir/events.jsonl" >/dev/null \
+    || fail 'legacy migration did not preserve recoverable mission, session, task, and summary history'
+  jq -e '.schema_version == 3 and .next_action == "Resume legacy-live" and .tasks["legacy-live"].completed == false' "$dir/mission.json" >/dev/null \
+    || fail 'legacy migration did not materialize a v3 recovery view'
+  jq -e '.schema_version == 3 and .mission_id == "legacy-recovery"' "$dir/capsule.json" >/dev/null \
+    || fail 'legacy migration did not replace the stale schema-1 capsule with the v3 compatibility capsule'
+  active_after=$(mission active) || fail 'active failed on the already migrated legacy mission'
+  [ "$(printf '%s\n' "$active_before" | grep -cFx legacy-recovery)" -eq 1 ] \
+    || fail 'legacy migration returned duplicate active mission ids'
+  [ "$(printf '%s\n' "$active_after" | grep -cFx legacy-recovery)" -eq 1 ] \
+    || fail 'repeated active discovery returned duplicate migrated mission ids'
+  mkdir -p "$HOME_DIR/data/missions/--invalid-legacy"
+  cp "$dir/capsule.json" "$HOME_DIR/data/missions/--invalid-legacy/capsule.json"
+  local invalid_err="$TMP_ROOT/invalid-legacy.err" invalid_rc=0
+  mission active >/dev/null 2>"$invalid_err" || invalid_rc=$?
+  [ "$invalid_rc" -ne 0 ] || fail 'invalid legacy mission id was silently ignored by active recovery'
+  assert_contains "$(cat "$invalid_err")" "--invalid-legacy" \
+    'invalid legacy mission recovery error did not name the mission directory'
+  pass 'schema-1 legacy missions migrate in place and remain discoverable by active recovery'
 }
 
 test_delivery_state_points_to_meta() {
@@ -104,6 +163,7 @@ test_concurrent_writers_are_serialized() {
 }
 
 test_original_prompt_and_event_identity
+test_legacy_missions_are_migrated_and_discovered
 test_delivery_state_points_to_meta
 test_torn_final_line_is_discarded
 test_concurrent_writers_are_serialized

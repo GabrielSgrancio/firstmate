@@ -1497,6 +1497,33 @@ test_spawn_relaunch_refuses_a_pane_outside_the_worktree() {
   pass "fm-spawn --relaunch: refuses to start a replacement outside the copy holding the work"
 }
 
+test_local_only_relaunch_refreshes_a_pristine_worktree_to_local_delivery_target() {
+  local dir out rc=0 old_head local_head worktree_head
+  dir=$(new_case local-only-base rl43)
+  add_ship_task "$dir" rl43 claude
+  old_head=$(git -C "$dir/proj" rev-parse HEAD)
+  printf 'local delivery commit\n' > "$dir/proj/local-main.txt"
+  git -C "$dir/proj" add local-main.txt
+  git -C "$dir/proj" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -qm local-delivery
+  local_head=$(git -C "$dir/proj" rev-parse HEAD)
+  [ "$local_head" != "$old_head" ] || fail "fixture local delivery target did not advance"
+  printf 'base_sha=%s\ntarget_branch=main\n' "$old_head" >> "$dir/home/state/rl43.meta"
+  sed -i 's/^mode=no-mistakes$/mode=local-only/' "$dir/home/state/rl43.meta"
+  printf 'zsh' > "$dir/fake/command"
+
+  out=$(run_spawn "$dir" rl43 --relaunch --harness claude) || rc=$?
+  expect_code 0 "$rc" "a local-only relaunch should refresh its pristine worktree"$'\n'"$out"
+  worktree_head=$(git -C "$dir/wt" rev-parse HEAD)
+  [ "$worktree_head" = "$local_head" ] \
+    || fail "local-only relaunch left the worktree at $worktree_head instead of local delivery $local_head"
+  [ -f "$dir/wt/local-main.txt" ] || fail "local-only relaunch did not expose the local delivery commit"
+  [ "$(meta_field "$dir" rl43 base_sha)" = "$local_head" ] \
+    || fail "local-only relaunch did not publish the refreshed base_sha"
+  [ "$(meta_field "$dir" rl43 target_branch)" = main ] \
+    || fail "local-only relaunch did not preserve the delivery target branch"
+  pass "fm-spawn --relaunch: local-only pristine worktrees refresh to the local delivery target"
+}
+
 test_relaunch_reverifies_an_already_in_flight_item_instead_of_rewriting_it() {
   local dir out rc=0
   command -v tasks-axi >/dev/null 2>&1 || {
@@ -1582,5 +1609,6 @@ test_spawn_relaunch_refuses_a_pending_authoritative_close
 test_spawn_relaunch_refuses_contradicting_flags
 test_spawn_relaunch_refuses_an_unrecorded_task
 test_spawn_relaunch_refuses_a_pane_outside_the_worktree
+test_local_only_relaunch_refreshes_a_pristine_worktree_to_local_delivery_target
 test_relaunch_reverifies_an_already_in_flight_item_instead_of_rewriting_it
 test_relaunch_moves_a_drifted_item_back_in_flight

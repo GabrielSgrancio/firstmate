@@ -2248,6 +2248,11 @@ else
   WT=""
   BRIEF="$DATA/$ID/brief.md"
 fi
+PROJ_NAME=$(basename "$PROJ_ABS")
+STANDING_MODE=
+if [ "$KIND" != secondmate ]; then
+  STANDING_MODE=$("$FM_ROOT/bin/fm-project-mode.sh" --raw "$PROJ_NAME" 2>/dev/null | cut -d' ' -f1) || STANDING_MODE=
+fi
 if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
   SPAWN_TREEHOUSE_PROJECT_LOCK=$(fm_treehouse_project_lock_path "$PROJ_ABS") || {
     echo "error: could not resolve the shared Treehouse project lock for $PROJ_ABS" >&2
@@ -2315,7 +2320,6 @@ delivery_rigor_rank() {  # <mode> -> 3 (most rigor) .. 1 (least); 0 = not a task
 # line. A spawn that disagrees would launch a worker whose instructions and whose
 # recorded task delivery differ, which is the exact drift this contract prevents.
 if [ "$KIND" = ship ]; then
-  PROJ_NAME=$(basename "$PROJ_ABS")
   BRIEF_MODE=$(sed -n 's/^Delivery contract: mode=\([^ ]*\).*$/\1/p' "$BRIEF" | head -n 1)
   if [ -z "$BRIEF_MODE" ]; then
     echo "warning: $BRIEF records no delivery contract line (scaffolded before ship briefs recorded one); launching on the explicit --mode $MODE - confirm its definition of done matches" >&2
@@ -2328,7 +2332,6 @@ if [ "$KIND" = ship ]; then
   # unregistered project resolves to the same no-mistakes standing default, which
   # is why the notice names the standing posture rather than the registry line. A
   # conditional policy is excluded: both of its legs are legitimate classifications.
-  STANDING_MODE=$("$FM_ROOT/bin/fm-project-mode.sh" --raw "$PROJ_NAME" 2>/dev/null | cut -d' ' -f1) || STANDING_MODE=
   if [ -n "$STANDING_MODE" ] && [ "$STANDING_MODE" != no-mistakes-prod-only ] \
      && [ "$(delivery_rigor_rank "$MODE")" -lt "$(delivery_rigor_rank "$STANDING_MODE")" ]; then
     echo "notice: $ID ships mode=$MODE while the standing posture for $PROJ_NAME is $STANDING_MODE - less rigor than the captain's standing posture; proceed only on a current explicit captain instruction or an intake judgment you can state" >&2
@@ -2499,7 +2502,8 @@ spawn_worktree_has_origin_config() {  # <worktree>
 }
 
 freshen_spawn_worktree_base() {  # <worktree>
-  local worktree=$1 default target expected actual status
+  local worktree=$1 default target expected actual status local_delivery=0
+  local target_branch
   status=$(git -C "$worktree" -c core.quotePath=false status --porcelain) || {
     echo "error: could not inspect pooled worktree '$worktree' before refreshing its base" >&2
     return 1
@@ -2512,9 +2516,24 @@ freshen_spawn_worktree_base() {  # <worktree>
     fi
     return 1
   fi
-  if ! spawn_worktree_has_origin_config "$worktree"; then
+  if [ "$MODE" = local-only ] || { [ "$KIND" = scout ] && [ "$STANDING_MODE" = local-only ]; }; then
+    local_delivery=1
+  fi
+  if [ "$local_delivery" = 1 ]; then
+    target_branch=$(spawn_local_delivery_branch "$worktree") || {
+      echo "error: could not determine the local delivery branch for pooled worktree '$worktree'; refusing to launch from a potentially stale base" >&2
+      return 1
+    }
+    target="refs/heads/$target_branch"
+  elif ! spawn_worktree_has_origin_config "$worktree"; then
     return 0
   fi
+  if [ "$local_delivery" = 1 ]; then
+    expected=$(git -C "$worktree" rev-parse --verify --quiet "$target^{commit}" 2>/dev/null) || {
+      echo "error: '$target_branch' is not a commit in the local delivery checkout for pooled worktree '$worktree'; refusing to launch from a potentially stale base" >&2
+      return 1
+    }
+  else
   if ! git -C "$worktree" fetch --quiet origin; then
     echo "error: could not fetch origin for pooled worktree '$worktree'; refusing to launch from a potentially stale base" >&2
     return 1
@@ -2536,6 +2555,7 @@ freshen_spawn_worktree_base() {  # <worktree>
     echo "error: '$target' is not a commit for pooled worktree '$worktree'; refusing to launch from a potentially stale base" >&2
     return 1
   }
+  fi
   if ! git -C "$worktree" reset --hard "$target" >/dev/null; then
     echo "error: could not reset pooled worktree '$worktree' to '$target'; refusing to launch from a potentially stale base" >&2
     return 1
@@ -2545,6 +2565,57 @@ freshen_spawn_worktree_base() {  # <worktree>
     echo "error: pooled worktree '$worktree' is at '${actual:-unknown}', not current '$target' ('$expected'); refusing to launch" >&2
     return 1
   fi
+}
+
+spawn_local_delivery_branch() {  # <worktree>
+  local worktree=$1 branch
+  branch=$(default_branch "$worktree") || return 1
+  git -C "$worktree" show-ref --verify --quiet "refs/heads/$branch" || {
+    for branch in main master; do
+      git -C "$worktree" show-ref --verify --quiet "refs/heads/$branch" && {
+        printf '%s\n' "$branch"
+        return 0
+      }
+    done
+    return 1
+  }
+  printf '%s\n' "$branch"
+}
+
+refresh_relaunch_local_base() {  # <worktree>
+  local worktree=$1 base_sha target_branch target_ref target_head actual status
+  [ "$MODE" = local-only ] || return 0
+  base_sha=$(fm_meta_get "$RELAUNCH_META" base_sha)
+  target_branch=$(fm_meta_get "$RELAUNCH_META" target_branch)
+  [ -n "$base_sha" ] && [ -n "$target_branch" ] || return 0
+  target_ref="refs/heads/$target_branch"
+  target_head=$(git -C "$worktree" rev-parse --verify --quiet "$target_ref^{commit}" 2>/dev/null) || {
+    echo "error: local-only relaunch for $ID cannot resolve its recorded delivery branch '$target_branch'; refusing to relaunch" >&2
+    return 1
+  }
+  actual=$(git -C "$worktree" rev-parse --verify --quiet HEAD 2>/dev/null) || {
+    echo "error: local-only relaunch for $ID cannot inspect its recorded worktree '$worktree'; refusing to relaunch" >&2
+    return 1
+  }
+  [ "$actual" = "$target_head" ] && return 0
+  [ "$actual" = "$base_sha" ] || {
+    echo "error: local-only relaunch for $ID has worktree HEAD $actual behind delivery target $target_head with recorded base $base_sha; refusing to relaunch stale work without reconciling its task branch" >&2
+    return 1
+  }
+  status=$(git -C "$worktree" -c core.quotePath=false status --porcelain) || {
+    echo "error: could not inspect local-only relaunch worktree '$worktree' before refreshing its base" >&2
+    return 1
+  }
+  [ -z "$status" ] || {
+    echo "error: local-only relaunch worktree '$worktree' is not clean; refusing to discard work while refreshing its base" >&2
+    return 1
+  }
+  git -C "$worktree" reset --hard "$target_ref" >/dev/null || {
+    echo "error: could not reset local-only relaunch worktree '$worktree' to '$target_branch'; refusing to relaunch" >&2
+    return 1
+  }
+  SPAWN_BASE_SHA=$target_head
+  SPAWN_TARGET_BRANCH=$target_branch
 }
 
 record_spawn_base_provenance() {  # <worktree>
@@ -3223,18 +3294,23 @@ elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
 
   validate_spawn_worktree "treehouse get" "$T"
 fi
-if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ]; then
-  freshen_spawn_worktree_base "$WT" || exit 1
-fi
 if [ "$KIND" != secondmate ]; then
   if [ "$RELAUNCH" -eq 1 ]; then
     SPAWN_BASE_SHA=$(fm_meta_get "$RELAUNCH_META" base_sha)
     SPAWN_TARGET_BRANCH=$(fm_meta_get "$RELAUNCH_META" target_branch)
+    refresh_relaunch_local_base "$WT" || exit 1
+  else
+    freshen_spawn_worktree_base "$WT" || exit 1
+  fi
+fi
+if [ "$KIND" != secondmate ]; then
+  if [ "$RELAUNCH" -eq 1 ]; then
+    [ -n "$SPAWN_BASE_SHA" ] || SPAWN_BASE_SHA=$(fm_meta_get "$RELAUNCH_META" base_sha)
+    [ -n "$SPAWN_TARGET_BRANCH" ] || SPAWN_TARGET_BRANCH=$(fm_meta_get "$RELAUNCH_META" target_branch)
   else
     record_spawn_base_provenance "$WT" || exit 1
   fi
 fi
-
 # Pre-register Claude's workspace trust for the worktree, at the first point the
 # worktree is known and before any per-task state is created below. The dialog
 # gates the pane before the brief is ever read, and it also gates loading the

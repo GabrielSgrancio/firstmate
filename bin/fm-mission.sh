@@ -369,6 +369,144 @@ def read_json(path):
         return json.load(handle)
 
 
+def _legacy_safe(value):
+    if isinstance(value, dict):
+        return {key: _legacy_safe(child) for key, child in value.items()
+                if key not in FORBIDDEN_META_FIELDS}
+    if isinstance(value, list):
+        return [_legacy_safe(child) for child in value]
+    return value
+
+
+def migrate_legacy_mission(mission_id):
+    """Convert a schema-1 mission/capsule into the v2 event stream once."""
+    directory = mission_path(mission_id)
+    legacy_path = os.path.join(directory, "mission.json")
+    legacy_capsule_path = os.path.join(directory, "capsule.json")
+    if not os.path.exists(legacy_path) and not os.path.exists(legacy_capsule_path):
+        raise StoreError("active mission directory has neither events.jsonl nor a legacy mission.json/capsule.json")
+    try:
+        legacy = read_json(legacy_path) if os.path.exists(legacy_path) else {}
+        capsule = read_json(legacy_capsule_path) if os.path.exists(legacy_capsule_path) else {}
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        raise StoreError("legacy mission %s could not be read: %s" % (mission_id, exc)) from exc
+    if not isinstance(legacy, dict) or not isinstance(capsule, dict):
+        raise StoreError("legacy mission %s must contain JSON objects" % mission_id)
+    versions = [item.get("schema_version") for item in (legacy, capsule) if item]
+    if any(version != 1 for version in versions):
+        raise StoreError("legacy mission %s has unsupported schema_version (expected 1)" % mission_id)
+
+    def first(*values):
+        return next((value for value in values if value not in (None, "")), None)
+
+    created_at = first(legacy.get("created_at"), capsule.get("updated_at"), now_utc())
+    updated_at = first(legacy.get("updated_at"), capsule.get("updated_at"), created_at)
+    intent = first(legacy.get("intent"), capsule.get("intent"), "Mission " + mission_id)
+    sessions = legacy.get("sessions") or capsule.get("sessions_history") or []
+    if not isinstance(sessions, list):
+        raise StoreError("legacy mission %s has a non-list sessions history" % mission_id)
+    task_graph = legacy.get("task_graph", [])
+    if not isinstance(task_graph, (list, dict)):
+        task_graph = []
+    next_action = first(capsule.get("recommended_next_step"), capsule.get("next_action"),
+                        "Continue the active mission")
+    prompt_candidates = ("original-prompt.md", "original-ufd-prompt.md")
+    prompt_name = next((name for name in prompt_candidates if os.path.exists(os.path.join(directory, name))),
+                       "original-prompt.md")
+    prompt_file = os.path.join(directory, prompt_name)
+    if not os.path.exists(prompt_file):
+        atomic_write(prompt_file, ("# Mission %s\n\n%s\n" % (mission_id, intent)).encode("utf-8"))
+    with open(prompt_file, "rb") as handle:
+        prompt_sha = hashlib.sha256(handle.read()).hexdigest()
+    original_prompt = {
+        "file": "data/missions/%s/%s" % (mission_id, prompt_name),
+        "sha256": prompt_sha, "source_transcript": None, "step_index": None,
+        "classification": "RECONSTRUCTED",
+    }
+
+    records = []
+
+    def add_event(event_id, event_type, payload, occurred_at):
+        require_event_id(event_id)
+        validate_event_type(event_type)
+        validate_payload(event_type, payload)
+        records.append({"schema_version": EVENT_SCHEMA_VERSION, "event_id": event_id,
+                        "sequence": len(records) + 1, "occurred_at": occurred_at or now_utc(),
+                        "type": event_type, "payload": payload})
+
+    add_event("migration-mission-created:" + mission_id, "mission_created", {
+        "mission_id": mission_id, "intent": intent, "original_prompt": original_prompt,
+        "task_graph": _legacy_safe(task_graph), "next_action": next_action,
+    }, created_at)
+    for index, session in enumerate(sessions, 1):
+        if not isinstance(session, dict):
+            continue
+        session_id = session.get("session_id")
+        if not isinstance(session_id, str) or not re.fullmatch(r"[A-Za-z0-9._:-]+", session_id):
+            continue
+        started_at = first(session.get("started_at"), created_at)
+        harness = first(session.get("harness"), "legacy")
+        add_event("migration-session-started:%d:%s" % (index, session_id), "session_started",
+                  {"session_id": session_id, "harness": harness}, started_at)
+        status = session.get("status")
+        ended_at = session.get("ended_at")
+        reason = first(session.get("end_reason"), session.get("reason"), "legacy session ended")
+        if status not in (None, "RUNNING") or ended_at:
+            add_event("migration-session-ended:%d:%s" % (index, session_id), "session_ended",
+                      {"session_id": session_id, "reason": reason}, ended_at or updated_at)
+
+    completed = capsule.get("completed_tasks_sample") or []
+    if not isinstance(completed, list):
+        completed = []
+    completed_ids = []
+    for item in completed:
+        if not isinstance(item, str):
+            continue
+        task_id = item.split(" - ", 1)[0].strip()
+        if re.fullmatch(r"[A-Za-z0-9._-]+", task_id) and task_id not in completed_ids:
+            completed_ids.append(task_id)
+            add_event("migration-task-completed:%s" % task_id, "task_completed",
+                      {"task_id": task_id}, updated_at)
+    in_flight = capsule.get("in_flight_tasks") or []
+    if not isinstance(in_flight, list):
+        in_flight = []
+    for index, task in enumerate(in_flight, 1):
+        if not isinstance(task, dict):
+            continue
+        task_id = task.get("task_id")
+        if not isinstance(task_id, str) or not re.fullmatch(r"[A-Za-z0-9._-]+", task_id):
+            continue
+        add_event("migration-task-dispatched:%d:%s" % (index, task_id), "task_dispatched",
+                  _legacy_safe(task), updated_at)
+    preserved = capsule.get("preserved_worktrees") or []
+    if not isinstance(preserved, list):
+        preserved = []
+    for index, worktree in enumerate(preserved, 1):
+        if isinstance(worktree, dict):
+            add_event("migration-worktree:%d" % index, "worktree_created",
+                      _legacy_safe(worktree), updated_at)
+    add_event("migration-legacy-summary:" + mission_id, "phase_transition", {
+        "phase": "legacy-schema-1-migration", "legacy_schema_version": 1,
+        "completed_tasks_count": capsule.get("completed_tasks_count", len(completed)),
+        "completed_tasks_sample": _legacy_safe(completed),
+        "pending_tasks_count": capsule.get("pending_tasks_count", 0),
+        "pending_tasks_sample": _legacy_safe(capsule.get("pending_tasks_sample") or []),
+        "in_flight_tasks_count": len(in_flight), "recommended_next_step": next_action,
+    }, updated_at)
+    if legacy.get("status", "ACTIVE") != "ACTIVE":
+        add_event("migration-supervisor-termination:" + mission_id, "supervisor_termination", {
+            "reason": "legacy schema-1 status=%s" % legacy.get("status"),
+        }, updated_at)
+    encoded = "".join(json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n" for record in records)
+    atomic_write(log_path(mission_id), encoded)
+
+
+def ensure_event_log(mission_id):
+    if os.path.exists(log_path(mission_id)):
+        return
+    migrate_legacy_mission(mission_id)
+
+
 def parse_delta(raw, base_offset):
     records = []
     valid_end = 0
@@ -452,7 +590,6 @@ def write_capsule(view):
                "updated_at": view["updated_at"]}
     text = json.dumps(capsule, indent=2) + "\n"
     atomic_write(capsule_path(view["mission_id"]), text)
-    atomic_write(os.path.join(state_dir, "mission-capsule.json"), text)
 
 
 def command_output(args, env, timeout=10):
@@ -696,14 +833,30 @@ def main():
         elif operation == "active":
             if os.path.isdir(missions_dir):
                 for mission_id in sorted(os.listdir(missions_dir)):
-                    if re.fullmatch(r"[A-Za-z0-9._-]+", mission_id) and not mission_id.startswith("-") and os.path.exists(log_path(mission_id)):
-                        view_file = view_path(mission_id)
-                        try:
-                            view = materialize(mission_id, emit_warning=False)
-                        except (OSError, ValueError, KeyError, json.JSONDecodeError, StoreError):
+                    directory = mission_path(mission_id)
+                    has_legacy_record = os.path.exists(os.path.join(directory, "mission.json")) or os.path.exists(os.path.join(directory, "capsule.json"))
+                    migrated = False
+                    if not re.fullmatch(r"[A-Za-z0-9._-]+", mission_id):
+                        if has_legacy_record:
+                            raise StoreError("legacy mission directory '%s' has an invalid id; rename it to a valid mission id before recovery" % mission_id)
+                        continue
+                    if mission_id.startswith("-"):
+                        if has_legacy_record:
+                            raise StoreError("legacy mission directory '%s' cannot be recovered because mission ids may not start with '-' ; rename it before recovery" % mission_id)
+                        continue
+                    if not os.path.exists(log_path(mission_id)):
+                        if not has_legacy_record:
                             continue
-                        if view.get("schema_version") == VIEW_SCHEMA_VERSION and view.get("status") == "ACTIVE":
-                            print(mission_id)
+                        ensure_event_log(mission_id)
+                        migrated = True
+                    try:
+                        view = materialize(mission_id, emit_warning=False)
+                    except (OSError, ValueError, KeyError, json.JSONDecodeError, StoreError) as exc:
+                        raise StoreError("active mission %s could not be recovered: %s" % (mission_id, exc)) from exc
+                    if migrated:
+                        write_capsule(view)
+                    if view.get("schema_version") == VIEW_SCHEMA_VERSION and view.get("status") == "ACTIVE":
+                        print(mission_id)
         else:
             raise StoreError("unknown operation: " + operation)
     except (OSError, ValueError, StoreError, KeyError, TypeError) as exc:

@@ -59,7 +59,40 @@ assert.equal(dispatch.routeId, "codex:gpt-5.6-terra:medium");
 assert.equal(dispatch.model, "gpt-5.6-terra");
 assert.ok(spawnArgs.includes("--backend"));
 assert.equal(spawnArgs[spawnArgs.indexOf("--backend") + 1], "herdr");
+assert.equal(spawnArgs[2], ROOT);
 assert.ok(fs.readFileSync(path.join(home, "data", "routing-executions.jsonl"), "utf8").includes(taskId));
+
+const registeredProject = path.join(home, "projects", "registered-project");
+fs.mkdirSync(registeredProject, { recursive: true });
+fs.appendFileSync(path.join(home, "data", "projects.md"), "- registered-project [local-only] - fixture project\n");
+const registeredTask = "api-registered-project";
+fs.mkdirSync(path.join(home, "data", registeredTask), { recursive: true });
+fs.writeFileSync(path.join(home, "data", registeredTask, "brief.md"), "# registered project brief\n");
+let registeredSpawnArgs;
+const registeredDispatch = await executeVerb("dispatch", {
+  id: registeredTask,
+  description: "Dispatch in the registered project",
+  dataClass: "PUBLIC",
+  repoPath: registeredProject
+}, {
+  spawnRunner: (args) => {
+    registeredSpawnArgs = args;
+    return { success: true, output: "registered project launch" };
+  }
+});
+assert.equal(registeredDispatch.dispatched, true);
+assert.equal(registeredSpawnArgs[2], fs.realpathSync(registeredProject));
+const untrustedProject = path.join(home, "unregistered-project");
+fs.mkdirSync(untrustedProject, { recursive: true });
+await assert.rejects(
+  () => executeVerb("dispatch", {
+    id: registeredTask,
+    description: "Reject an untrusted project path",
+    dataClass: "PUBLIC",
+    repoPath: untrustedProject
+  }),
+  /not a registered or trusted project/
+);
 
 await assert.rejects(
   () => executeVerb("dispatch", { id: taskId, description: "missing classification" }),

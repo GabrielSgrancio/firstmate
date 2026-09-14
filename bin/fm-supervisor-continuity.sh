@@ -200,13 +200,26 @@ failover_once() {
 }
 
 run_loop() {
-  local mission_id pid identity lease_identity failure
+  local mission_id pid identity lease_identity failure active_missions
   mkdir -p "$STATE" || die 'could not create state directory'
   exec 9>"$LOCK" || die 'could not open continuity lock'
   flock -n 9 || die 'another continuity service owns this home'
   while :; do
     ensure_watcher
+    if active_missions=$(FM_HOME="$FM_HOME" FM_DATA_OVERRIDE="$DATA" FM_STATE_OVERRIDE="$STATE" \
+      "$MISSION" active 2>&1); then
+      if [ -n "$active_missions" ] && [ "$(printf '%s\n' "$active_missions" | wc -l | tr -d ' ')" -gt 1 ]; then
+        log "multiple active missions discovered on disk: $(printf '%s' "$active_missions" | tr '\n' ' ')"
+      fi
+    else
+      log "active mission discovery failed; recovery is not silent: $active_missions"
+      active_missions=
+    fi
     mission_id=$(cat "$STATE/.active-mission" 2>/dev/null || true)
+    if ! valid_id "$mission_id" && [ -n "$active_missions" ]; then
+      mission_id=$(printf '%s\n' "$active_missions" | head -1)
+      log "using discovered active mission=$mission_id because state/.active-mission is absent"
+    fi
     if valid_id "$mission_id" && [ -f "$LEASE" ]; then
       if replacement_healthy; then
         :
