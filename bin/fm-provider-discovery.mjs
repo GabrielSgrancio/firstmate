@@ -34,8 +34,103 @@ function loadSnapshotFallback(harness, errorReason) {
   };
 }
 
+// --- Harness executable integrity gate --------------------------------------
+// A harness must prove its own executable is intact before any of its models
+// can become ROUTING_ELIGIBLE (see data/incident-2026-09-13-oom-cli-truncation.md:
+// four harness executables were found zeroed simultaneously during a host OOM,
+// with no code path here checking executable integrity before routing on it).
+// On failure the harness is marked broken and excluded from routing; nothing
+// in this gate repairs, reinstalls, or overwrites the executable.
+
+function resolveOnPath(name) {
+  for (const dir of (process.env.PATH || '').split(path.delimiter)) {
+    if (!dir) continue;
+    const candidate = path.join(dir, name);
+    try {
+      if (fs.statSync(candidate).isFile()) return candidate;
+    } catch {
+      // not present in this PATH entry
+    }
+  }
+  return null;
+}
+
+function checkExecutableFile(resolvedPath) {
+  if (!resolvedPath) {
+    return { ok: false, reason: 'executable could not be resolved on PATH' };
+  }
+  let realPath;
+  try {
+    realPath = fs.realpathSync(resolvedPath);
+  } catch (e) {
+    return { ok: false, reason: `executable path ${resolvedPath} does not exist (${e.code || e.message})` };
+  }
+  let stat;
+  try {
+    stat = fs.statSync(realPath);
+  } catch (e) {
+    return { ok: false, reason: `cannot stat resolved executable ${realPath}: ${e.message}` };
+  }
+  if (!stat.isFile()) {
+    return { ok: false, reason: `resolved executable ${realPath} is not a regular file` };
+  }
+  if (stat.size === 0) {
+    return { ok: false, reason: `executable ${realPath} is zero bytes` };
+  }
+  if ((stat.mode & 0o111) === 0) {
+    return { ok: false, reason: `executable ${realPath} has no executable bit set` };
+  }
+  return { ok: true, realPath };
+}
+
+function looksLikePlausibleProbeOutput(text) {
+  const trimmed = (text || '').trim();
+  if (!trimmed || trimmed.length > 4000) return false;
+  const printable = trimmed.replace(/[^\x20-\x7E\s]/g, '');
+  return printable.length / trimmed.length > 0.9;
+}
+
+function probeVersion(execPath, args) {
+  try {
+    const out = execFileSync(execPath, args, { timeout: 5000, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    if (!looksLikePlausibleProbeOutput(out)) {
+      return { ok: false, reason: `${execPath} ${args.join(' ')} produced empty or implausible output` };
+    }
+    return { ok: true, output: out.trim() };
+  } catch (e) {
+    return { ok: false, reason: `${execPath} ${args.join(' ')} failed: ${e.message}` };
+  }
+}
+
+function brokenCatalog(harness, reasons, extra = {}) {
+  for (const reason of reasons) {
+    console.log(`PROVIDER_DISCOVERY: ${harness} BROKEN - ${reason}`);
+  }
+  return {
+    harness,
+    stale: true,
+    refresh_failed: true,
+    broken: true,
+    integrity: { ok: false, reasons },
+    source: 'harness_integrity_check',
+    discovered_at: new Date().toISOString(),
+    models: [],
+    ...extra
+  };
+}
+
 // 1. Codex Discovery Adapter
-export function discoverCodex({ cachePath = null } = {}) {
+export function discoverCodex({ cachePath = null, codexBin = null, probeArgs = ['--version'] } = {}) {
+  const resolvedBin = codexBin || process.env.CODEX_BIN || resolveOnPath('codex');
+  const fileCheck = checkExecutableFile(resolvedBin);
+  if (!fileCheck.ok) {
+    return brokenCatalog('codex', [fileCheck.reason]);
+  }
+  const probe = probeVersion(fileCheck.realPath, probeArgs);
+  if (!probe.ok) {
+    return brokenCatalog('codex', [probe.reason]);
+  }
+
   cachePath ||= path.join(process.env.HOME || '', '.codex/models_cache.json');
   if (!fs.existsSync(cachePath)) {
     return loadSnapshotFallback('codex', 'Cache file ~/.codex/models_cache.json not found');
@@ -67,6 +162,8 @@ export function discoverCodex({ cachePath = null } = {}) {
       harness: 'codex',
       stale: false,
       refresh_failed: false,
+      broken: false,
+      integrity: { ok: true },
       discovered_at: new Date().toISOString(),
       source: 'codex_models_cache',
       models
@@ -77,7 +174,17 @@ export function discoverCodex({ cachePath = null } = {}) {
 }
 
 // 2. Claude Code Discovery Adapter (honestly parsed from ~/.claude.json structured cache)
-export function discoverClaude({ cachePath = null } = {}) {
+export function discoverClaude({ cachePath = null, claudeBin = null, probeArgs = ['--version'] } = {}) {
+  const resolvedBin = claudeBin || process.env.CLAUDE_BIN || resolveOnPath('claude');
+  const fileCheck = checkExecutableFile(resolvedBin);
+  if (!fileCheck.ok) {
+    return brokenCatalog('claude', [fileCheck.reason]);
+  }
+  const probe = probeVersion(fileCheck.realPath, probeArgs);
+  if (!probe.ok) {
+    return brokenCatalog('claude', [probe.reason]);
+  }
+
   const claudeJsonPath = cachePath || path.join(process.env.HOME || '', '.claude.json');
   if (!fs.existsSync(claudeJsonPath)) {
     return loadSnapshotFallback('claude', 'Configuration file ~/.claude.json not found');
@@ -202,6 +309,8 @@ export function discoverClaude({ cachePath = null } = {}) {
       harness: 'claude',
       stale: false,
       refresh_failed: false,
+      broken: false,
+      integrity: { ok: true },
       discovered_at: new Date().toISOString(),
       source: 'claude_code_cache_slots',
       observed_slot_models: Array.from(slotModels),
@@ -214,12 +323,20 @@ export function discoverClaude({ cachePath = null } = {}) {
 
 // 3. Antigravity Discovery Adapter
 export function discoverAntigravity({ agyBin = process.env.AGY_BIN || '/home/gabrielsgrancio/.local/bin/agy' } = {}) {
+  const fileCheck = checkExecutableFile(agyBin);
+  if (!fileCheck.ok) {
+    return brokenCatalog('antigravity', [fileCheck.reason], { gemini_native: [], third_party: [] });
+  }
+
   let lines = [];
   try {
-    const out = execFileSync(agyBin, ['models'], { timeout: 10000, stdio: ['ignore', 'pipe', 'ignore'] }).toString();
+    const out = execFileSync(fileCheck.realPath, ['models'], { timeout: 10000, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    if (!out || !out.trim()) {
+      return brokenCatalog('antigravity', [`${fileCheck.realPath} models produced no output`], { gemini_native: [], third_party: [] });
+    }
     lines = out.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('⠋') && !l.startsWith('Fetching'));
   } catch (e) {
-    return loadSnapshotFallback('antigravity', `AGY binary call failed: ${e.message}`);
+    return brokenCatalog('antigravity', [`${fileCheck.realPath} models failed: ${e.message}`], { gemini_native: [], third_party: [] });
   }
 
   const geminiNative = [];
@@ -271,6 +388,8 @@ export function discoverAntigravity({ agyBin = process.env.AGY_BIN || '/home/gab
     harness: 'antigravity',
     stale: false,
     refresh_failed: false,
+    broken: false,
+    integrity: { ok: true },
     discovered_at: now,
     source: 'agy_cli_models',
     gemini_native: geminiNative,
@@ -389,11 +508,25 @@ function normalizeOpenCodeCatalog(data) {
 }
 
 // 5. Normalizer to RouteTargets
+function brokenRoute(harness, catalog) {
+  return {
+    route_id: `${harness}:BROKEN`,
+    harness,
+    routing_status: 'BROKEN',
+    broken: true,
+    broken_reasons: (catalog.integrity && catalog.integrity.reasons) || [],
+    discovered_at: catalog.discovered_at
+  };
+}
+
 export function compileRouteTargets(catalogs) {
   const routes = [];
 
   // Codex Routes
-  for (const m of catalogs.codex.models) {
+  if (catalogs.codex.broken) {
+    routes.push(brokenRoute('codex', catalogs.codex));
+  }
+  for (const m of (catalogs.codex.broken ? [] : catalogs.codex.models)) {
     if (m.visibility === 'hide') continue;
     for (const effort of m.supported_efforts) {
       routes.push({
@@ -421,7 +554,10 @@ export function compileRouteTargets(catalogs) {
   }
 
   // Claude Native Routes
-  for (const m of catalogs.claude.models) {
+  if (catalogs.claude.broken) {
+    routes.push(brokenRoute('claude', catalogs.claude));
+  }
+  for (const m of (catalogs.claude.broken ? [] : catalogs.claude.models)) {
     const efforts = m.supported_efforts.length > 0 ? m.supported_efforts : [null];
     for (const effort of efforts) {
       const routeId = effort ? `claude:${m.resolved_runtime_model}:${effort}` : `claude:${m.resolved_runtime_model}`;
@@ -449,8 +585,12 @@ export function compileRouteTargets(catalogs) {
     }
   }
 
+  // AGY routes (Gemini native + third-party), gated together on one executable
+  if (catalogs.antigravity.broken) {
+    routes.push(brokenRoute('antigravity', catalogs.antigravity));
+  }
   // AGY Gemini Native Routes
-  for (const m of (catalogs.antigravity.gemini_native || [])) {
+  for (const m of (catalogs.antigravity.broken ? [] : (catalogs.antigravity.gemini_native || []))) {
     const effort = m.slug.includes('-high') ? 'high' : (m.slug.includes('-low') ? 'low' : 'medium');
     routes.push({
       route_id: `agy:${m.slug}`,
@@ -476,7 +616,7 @@ export function compileRouteTargets(catalogs) {
   }
 
   // AGY 3P Routes (Distinct First-Class Market!)
-  for (const m of (catalogs.antigravity.third_party || [])) {
+  for (const m of (catalogs.antigravity.broken ? [] : (catalogs.antigravity.third_party || []))) {
     const effort = m.slug.includes('thinking') ? 'high' : 'medium';
     routes.push({
       route_id: `agy-3p:${m.slug}`,

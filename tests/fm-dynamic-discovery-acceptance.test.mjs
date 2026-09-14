@@ -61,6 +61,46 @@ assert.equal(fallback.stale, true);
 assert.equal(fallback.refresh_failed, true);
 assert.equal(fallback.source, 'codex_models_cache');
 
+// Harness executable integrity gate: a synthetic zero-byte fixture must be
+// classified BROKEN and excluded from ROUTING_ELIGIBLE, never silently
+// omitted and never auto-repaired (data/incident-2026-09-13-oom-cli-truncation.md).
+const zeroByteBin = path.join(home, 'zero-byte-codex');
+fs.writeFileSync(zeroByteBin, '');
+fs.chmodSync(zeroByteBin, 0o755);
+const brokenCodex = discovery.discoverCodex({
+  cachePath: path.join(home, 'home', '.codex', 'models_cache.json'),
+  codexBin: zeroByteBin
+});
+assert.equal(brokenCodex.broken, true);
+assert.equal(brokenCodex.integrity.ok, false);
+assert.ok(brokenCodex.integrity.reasons[0].includes('zero bytes'));
+assert.equal(brokenCodex.models.length, 0);
+
+// A healthy real harness already discovered on this host (no codexBin/claudeBin
+// override -> resolved from PATH) must still classify ROUTING_ELIGIBLE: the gate
+// must not exclude everything.
+assert.equal(codex.broken, false);
+assert.equal(codex.integrity.ok, true);
+assert.equal(codex.models[0].routing_status, 'ROUTING_ELIGIBLE');
+assert.equal(claude.broken, false);
+assert.equal(claude.integrity.ok, true);
+
+// BROKEN harnesses must never appear in the compiled ROUTING_ELIGIBLE list
+// consumed downstream by dispatch/routing - only a BROKEN marker route, and
+// no ROUTING_ELIGIBLE route for that harness.
+const compiledWithBrokenCodex = discovery.compileRouteTargets({
+  codex: brokenCodex,
+  claude,
+  antigravity: { harness: 'antigravity', discovered_at: now(), gemini_native: [], third_party: [] },
+  opencode_go: openCode
+});
+assert.ok(compiledWithBrokenCodex.some(route => route.harness === 'codex' && route.routing_status === 'BROKEN'));
+assert.ok(!compiledWithBrokenCodex.some(route => route.harness === 'codex' && route.routing_status === 'ROUTING_ELIGIBLE'));
+
+function now() {
+  return new Date().toISOString();
+}
+
 const diff = discovery.diffCatalogs(
   { codex: { models: [{ slug: 'same', context_window: 1 }] } },
   { codex: { models: [{ slug: 'same', context_window: 2 }, { slug: 'new' }] } }
