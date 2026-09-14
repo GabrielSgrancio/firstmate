@@ -2584,7 +2584,7 @@ spawn_local_delivery_branch() {  # <worktree>
 
 refresh_relaunch_local_base() {  # <worktree>
   local worktree=$1 base_sha target_branch target_ref target_head actual status
-  [ "$MODE" = local-only ] || return 0
+  [ "$MODE" = local-only ] || { [ "$KIND" = scout ] && [ "$STANDING_MODE" = local-only ]; } || return 0
   base_sha=$(fm_meta_get "$RELAUNCH_META" base_sha)
   target_branch=$(fm_meta_get "$RELAUNCH_META" target_branch)
   [ -n "$base_sha" ] && [ -n "$target_branch" ] || return 0

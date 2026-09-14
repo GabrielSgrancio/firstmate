@@ -525,6 +525,7 @@ def parse_delta(raw, base_offset):
 
 
 def materialize(mission_id, emit_warning=True):
+    ensure_event_log(mission_id)
     path = log_path(mission_id)
     with open(path, "rb") as handle:
         raw = handle.read()
@@ -833,30 +834,31 @@ def main():
         elif operation == "active":
             if os.path.isdir(missions_dir):
                 for mission_id in sorted(os.listdir(missions_dir)):
-                    directory = mission_path(mission_id)
-                    has_legacy_record = os.path.exists(os.path.join(directory, "mission.json")) or os.path.exists(os.path.join(directory, "capsule.json"))
-                    migrated = False
-                    if not re.fullmatch(r"[A-Za-z0-9._-]+", mission_id):
-                        if has_legacy_record:
-                            raise StoreError("legacy mission directory '%s' has an invalid id; rename it to a valid mission id before recovery" % mission_id)
-                        continue
-                    if mission_id.startswith("-"):
-                        if has_legacy_record:
-                            raise StoreError("legacy mission directory '%s' cannot be recovered because mission ids may not start with '-' ; rename it before recovery" % mission_id)
-                        continue
-                    if not os.path.exists(log_path(mission_id)):
-                        if not has_legacy_record:
-                            continue
-                        ensure_event_log(mission_id)
-                        migrated = True
                     try:
+                        directory = mission_path(mission_id)
+                        has_legacy_record = os.path.exists(os.path.join(directory, "mission.json")) or os.path.exists(os.path.join(directory, "capsule.json"))
+                        migrated = False
+                        if not re.fullmatch(r"[A-Za-z0-9._-]+", mission_id):
+                            if has_legacy_record:
+                                raise StoreError("legacy mission directory '%s' has an invalid id; rename it to a valid mission id before recovery" % mission_id)
+                            continue
+                        if mission_id.startswith("-"):
+                            if has_legacy_record:
+                                raise StoreError("legacy mission directory '%s' cannot be recovered because mission ids may not start with '-' ; rename it before recovery" % mission_id)
+                            continue
+                        if not os.path.exists(log_path(mission_id)):
+                            if not has_legacy_record:
+                                continue
+                            ensure_event_log(mission_id)
+                            migrated = True
                         view = materialize(mission_id, emit_warning=False)
-                    except (OSError, ValueError, KeyError, json.JSONDecodeError, StoreError) as exc:
-                        raise StoreError("active mission %s could not be recovered: %s" % (mission_id, exc)) from exc
-                    if migrated:
-                        write_capsule(view)
-                    if view.get("schema_version") == VIEW_SCHEMA_VERSION and view.get("status") == "ACTIVE":
-                        print(mission_id)
+                        if migrated:
+                            write_capsule(view)
+                        if view.get("schema_version") == VIEW_SCHEMA_VERSION and view.get("status") == "ACTIVE":
+                            print(mission_id)
+                    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError, StoreError) as exc:
+                        print("error: active mission %s could not be recovered: %s" % (mission_id, exc), file=sys.stderr)
+                        continue
         else:
             raise StoreError("unknown operation: " + operation)
     except (OSError, ValueError, StoreError, KeyError, TypeError) as exc:

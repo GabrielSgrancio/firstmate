@@ -1524,6 +1524,34 @@ test_local_only_relaunch_refreshes_a_pristine_worktree_to_local_delivery_target(
   pass "fm-spawn --relaunch: local-only pristine worktrees refresh to the local delivery target"
 }
 
+test_scout_relaunch_refreshes_a_registered_local_only_delivery_target() {
+  local dir out rc=0 old_head local_head worktree_head
+  dir=$(new_case scout-local-only-base rl44)
+  add_ship_task "$dir" rl44 claude
+  sed -i 's/^kind=ship$/kind=scout/' "$dir/home/state/rl44.meta"
+  printf '%s\n' '- proj [local-only] - registered local delivery fixture (added 2026-09-14)' > "$dir/home/data/projects.md"
+  old_head=$(git -C "$dir/proj" rev-parse HEAD)
+  printf 'current local delivery target\n' > "$dir/proj/local-main.txt"
+  git -C "$dir/proj" add local-main.txt
+  git -C "$dir/proj" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -qm scout-local-delivery
+  local_head=$(git -C "$dir/proj" rev-parse refs/heads/main)
+  [ "$local_head" != "$old_head" ] || fail 'fixture local delivery target did not advance'
+  printf 'base_sha=%s\ntarget_branch=main\n' "$old_head" >> "$dir/home/state/rl44.meta"
+  printf 'zsh' > "$dir/fake/command"
+
+  out=$(run_spawn "$dir" rl44 --relaunch --harness claude) || rc=$?
+  expect_code 0 "$rc" "a scout relaunch on a registered local-only project should refresh its pristine worktree"$'\n'"$out"
+  worktree_head=$(git -C "$dir/wt" rev-parse HEAD)
+  [ "$worktree_head" = "$local_head" ] \
+    || fail "scout relaunch left the worktree at $worktree_head instead of local delivery $local_head"
+  [ -f "$dir/wt/local-main.txt" ] || fail 'scout relaunch did not expose the current local delivery commit'
+  [ "$(meta_field "$dir" rl44 base_sha)" = "$local_head" ] \
+    || fail 'scout relaunch did not publish the refreshed local delivery base_sha'
+  [ "$(meta_field "$dir" rl44 target_branch)" = main ] \
+    || fail 'scout relaunch did not preserve the local delivery target branch'
+  pass "fm-spawn --relaunch: a scout on a registered local-only project refreshes to the current local delivery target"
+}
+
 test_relaunch_reverifies_an_already_in_flight_item_instead_of_rewriting_it() {
   local dir out rc=0
   command -v tasks-axi >/dev/null 2>&1 || {
@@ -1610,5 +1638,6 @@ test_spawn_relaunch_refuses_contradicting_flags
 test_spawn_relaunch_refuses_an_unrecorded_task
 test_spawn_relaunch_refuses_a_pane_outside_the_worktree
 test_local_only_relaunch_refreshes_a_pristine_worktree_to_local_delivery_target
+test_scout_relaunch_refreshes_a_registered_local_only_delivery_target
 test_relaunch_reverifies_an_already_in_flight_item_instead_of_rewriting_it
 test_relaunch_moves_a_drifted_item_back_in_flight

@@ -94,10 +94,59 @@ JSON
   cp "$dir/capsule.json" "$HOME_DIR/data/missions/--invalid-legacy/capsule.json"
   local invalid_err="$TMP_ROOT/invalid-legacy.err" invalid_rc=0
   mission active >/dev/null 2>"$invalid_err" || invalid_rc=$?
-  [ "$invalid_rc" -ne 0 ] || fail 'invalid legacy mission id was silently ignored by active recovery'
+  [ "$invalid_rc" -eq 0 ] || fail 'invalid legacy mission id made active recovery fail instead of continuing'
   assert_contains "$(cat "$invalid_err")" "--invalid-legacy" \
     'invalid legacy mission recovery error did not name the mission directory'
   pass 'schema-1 legacy missions migrate in place and remain discoverable by active recovery'
+}
+
+test_invalid_legacy_mission_does_not_abort_fleet_discovery() {
+  local fleet="$TMP_ROOT/legacy-fleet" invalid_err="$TMP_ROOT/legacy-fleet.err" out rc=0 mission_id
+  mkdir -p "$fleet/--next"
+  cp "$HOME_DIR/data/missions/legacy-recovery/capsule.json" "$fleet/--next/capsule.json"
+  for mission_id in e2e-supervisor-failover-test recovery-sprint-ufd-quota; do
+    mkdir -p "$fleet/$mission_id"
+    cat > "$fleet/$mission_id/mission.json" <<JSON
+{
+  "schema_version": 1,
+  "mission_id": "$mission_id",
+  "created_at": "2026-09-13T02:12:16Z",
+  "updated_at": "2026-09-13T02:12:16Z",
+  "status": "ACTIVE",
+  "intent": "Legacy recovery fixture for $mission_id",
+  "sessions": []
+}
+JSON
+    cat > "$fleet/$mission_id/capsule.json" <<JSON
+{
+  "schema_version": 1,
+  "mission_id": "$mission_id",
+  "intent": "Legacy recovery fixture for $mission_id",
+  "updated_at": "2026-09-13T02:12:16Z",
+  "completed_tasks_count": 0,
+  "completed_tasks_sample": [],
+  "in_flight_tasks": [],
+  "preserved_worktrees": [],
+  "pending_tasks_count": 0,
+  "pending_tasks_sample": [],
+  "recommended_next_step": "Continue recovery"
+}
+JSON
+  done
+  mkdir -p "$HOME_DIR/data/missions"
+  cp -a "$fleet/." "$HOME_DIR/data/missions/"
+
+  out=$(mission active 2>"$invalid_err") || rc=$?
+  expect_code 0 "$rc" 'one invalid legacy mission must not make active discovery fail'
+  assert_contains "$(cat "$invalid_err")" "--next" \
+    'invalid legacy mission recovery must remain visible and name its directory'
+  for mission_id in e2e-supervisor-failover-test recovery-sprint-ufd-quota; do
+    printf '%s\n' "$out" | grep -Fx "$mission_id" >/dev/null \
+      || fail "valid mission $mission_id was not discovered after the invalid directory"
+    [ -f "$HOME_DIR/data/missions/$mission_id/events.jsonl" ] \
+      || fail "valid mission $mission_id was not migrated after the invalid directory"
+  done
+  pass 'invalid legacy mission does not abort discovery or migration of later valid missions'
 }
 
 test_delivery_state_points_to_meta() {
@@ -164,6 +213,7 @@ test_concurrent_writers_are_serialized() {
 
 test_original_prompt_and_event_identity
 test_legacy_missions_are_migrated_and_discovered
+test_invalid_legacy_mission_does_not_abort_fleet_discovery
 test_delivery_state_points_to_meta
 test_torn_final_line_is_discarded
 test_concurrent_writers_are_serialized
