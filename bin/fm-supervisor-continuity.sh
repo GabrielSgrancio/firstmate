@@ -19,6 +19,7 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 MISSION="$SCRIPT_DIR/fm-mission.sh"
 WATCH="$SCRIPT_DIR/fm-watch.sh"
+SUPERVISOR_LAUNCH="$SCRIPT_DIR/fm-supervisor-launch.sh"
 SERVICE_NAME=firstmate-supervisor-continuity.service
 LEASE="$STATE/.supervisor-continuity-lease"
 REPLACEMENT="$STATE/supervisor-continuity-replacement.json"
@@ -190,7 +191,7 @@ failover_once() {
     "$MISSION" session-start "$mission_id" --harness "$new_harness" --session-id "$session_id" >/dev/null || return 1
   now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   env FM_HOME="$FM_HOME" FM_ROOT_OVERRIDE="$FM_ROOT" FM_SUPERVISOR_SESSION_ID="$session_id" \
-    setsid "$command" </dev/null >>"$STATE/.supervisor-replacement.log" 2>&1 &
+    setsid "$SUPERVISOR_LAUNCH" "$new_harness" "$command" </dev/null >>"$STATE/.supervisor-replacement.log" 2>&1 &
   pid=$!
   identity=$(pid_identity "$pid") || return 1
   record_replacement "$capsule" "$mission_id" "$pid" "$identity" "$new_harness" "$session_id" "$command" "$now" || return 1

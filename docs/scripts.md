@@ -82,6 +82,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-procevent-when.sh`   | Fire a trust-bound deterministic action at most once when its registered condition holds, then wake with the outcome |
 | `fm-mission.sh`          | Persist mission intent, prompt pointer, task graph, next action, and session history in a resume capsule; discover active missions and render a reconciled supervisor resume context |
 | `fm-supervisor-continuity.sh` | Run the systemd-owned outer supervisor continuity boundary and launch one routed replacement when its lease is lost |
+| `fm-supervisor-launch.sh` | Discover active missions, render their resume contexts, and deliver the typed launch brief to a routed replacement harness |
 | `fm-supervisor-route.sh` | Route a lost supervisor through Router V2 and return an eligible harness plus its configured executable |
 | `fm-gate-refuse-lib.sh`  | Shared no-mistakes gate-context refusal for fleet lifecycle entrypoints               |
 | `fm-watch-arm.sh`        | Verified home-scoped watcher arm wrapper with loud cycle endings and bounded lifecycle ledger |

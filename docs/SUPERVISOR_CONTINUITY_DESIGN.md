@@ -10,10 +10,10 @@ The supervisor-continuity primitive is a `systemd --user` service running `bin/f
 
 The service is the outer lifecycle owner, while the script owns only bounded detection, durable mission transition, and one replacement launch transaction.
 
-The replacement is launched through the configured FirstMate replacement command and is recorded with the same mission identifier before the command is started.
+The replacement is launched through `bin/fm-supervisor-launch.sh` with the configured Firstmate replacement command and is recorded with the same mission identifier before the command is started.
 
-The replacement command receives the FirstMate home and a session identifier, but not mission identity or capsule environment variables.
-It must discover active missions through `bin/fm-mission.sh active` and load the selected context through `bin/fm-mission.sh resume-context`.
+The launch adapter receives only the FirstMate home and a session identifier from continuity, but not mission identity or capsule environment variables.
+It discovers active missions through `bin/fm-mission.sh active`, loads each context through `bin/fm-mission.sh resume-context`, and delivers the result as the existing typed `launch-brief` operational input before the harness's first turn.
 
 The service unit uses `Restart=always`, so a continuity process crash is repaired by systemd without a supervisor turn.
 
@@ -69,6 +69,6 @@ No replacement is started when the route hook, mission capsule, lease identity, 
 
 The portable E2E test starts the actual foreground continuity entrypoint, starts a real fixture supervisor process, kills that process, and observes the durable replacement record and replacement process from a separate test process.
 
-The fixture replacement command reads the capsule and writes its own launch record, so the test proves state crossing the process boundary without spending provider quota.
+The fixture replacement command receives and decodes the typed launch brief, then performs its own active-mission lookup for lease recording, so the test proves state crossing the process boundary without spending provider quota.
 
 A live `systemd --user` installation check remains environment-dependent and is recorded separately from the portable process-level proof.

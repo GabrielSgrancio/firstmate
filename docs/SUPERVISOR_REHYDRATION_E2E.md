@@ -17,16 +17,28 @@ through `fm-orchestrator-api.mjs` and Router V2, and launches a tracked worker
 fixture through the public spawn hook.
 It kills Supervisor A with `SIGKILL` and lets the real foreground continuity
 service route and launch Supervisor B under the alternate Claude route.
-Supervisor B discovers the mission with `active` and invokes `resume-context`
-without consuming mission identity or capsule environment variables.
-The test asserts the rendered context and the accumulated event log across
+The replacement launch adapter discovers the mission with `active`, invokes
+`resume-context`, and delivers the rendered context as a typed `launch-brief`
+input without consuming mission identity or capsule environment variables.
+The fixture supervisor then records the received input and performs its own
+active-mission lookup before starting its turn.
+The test asserts the delivered context and the accumulated event log across
 the process boundary.
 
 The fixture workers are synthetic processes and consume no provider quota.
-The test proves the continuity and rehydration mechanism, not that a vendor
-CLI has independently wired its own startup prompt to invoke the bootstrap.
-A production harness replacement command must call `active` and
-`resume-context` before beginning its normal supervisor turn.
+The test proves that the production replacement path invokes the bootstrap and
+delivers its output before the routed harness command begins its turn.
+Its assertions cover mission-identity match, task-graph match, worktree and
+branch match, progress and delivery-history match, a duplication check (the
+worker is dispatched exactly once across the failover), and a
+captain-intervention count (the failover creates zero new captain holds or
+task blocks).
+
+A second scenario in the same file, `runFailoverScenario` run against an
+independently-constructed mission id, task id, prompt, worktree, and hold,
+proves the wiring generalizes rather than being overfit to one hardcoded
+fixture value. It still uses the fixture harness in place of a real vendor CLI,
+by design, so the proof stays credential-free and spends no provider quota.
 
 Run the focused proof with:
 

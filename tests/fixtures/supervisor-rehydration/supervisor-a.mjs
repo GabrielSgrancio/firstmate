@@ -2,9 +2,12 @@ import { execFileSync, spawn } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
-const [root, home, worker] = process.argv.slice(2);
+const [root, home, worker, missionIdArg, taskIdArg, nextActionArg, holdIdArg] = process.argv.slice(2);
 const mission = path.join(root, "bin", "fm-mission.sh");
-const taskId = "rehydration-task";
+const missionId = missionIdArg || "rehydration-e2e";
+const taskId = taskIdArg || "rehydration-task";
+const nextAction = nextActionArg || "Resolve the open synthetic-task hold";
+const holdId = holdIdArg || "rehydration-hold";
 const state = path.join(home, "state");
 const data = path.join(home, "data");
 const project = path.join(home, "project");
@@ -30,13 +33,13 @@ function run(args) {
 }
 
 function append(eventId, type, payload) {
-  run(["append", "rehydration-e2e", "--event-id", eventId, "--type", type,
+  run(["append", missionId, "--event-id", eventId, "--type", type,
     "--payload", JSON.stringify(payload)]);
 }
 
 mkdirSync(path.join(data, taskId), { recursive: true });
 writeFileSync(path.join(data, taskId, "brief.md"), "# Synthetic worker\n");
-run(["session-start", "rehydration-e2e", "--harness", "codex", "--session-id", "session-a"]);
+run(["session-start", missionId, "--harness", "codex", "--session-id", "session-a"]);
 const dispatch = await executeVerb("dispatch", {
   id: taskId, description: "Dispatch the synthetic rehydration worker",
   role: "general_engineer", dataClass: "PUBLIC", effort: "medium", scout: true,
@@ -45,7 +48,7 @@ const dispatch = await executeVerb("dispatch", {
     writeFileSync(path.join(state, `${taskId}.meta`), [
       `project=${project}`,
       `worktree=${worktree}`,
-      "branch=fm/rehydration-task",
+      `branch=fm/${taskId}`,
       "target_branch=main",
       "base_sha=fixture-base",
       "backend=tmux",
@@ -63,20 +66,20 @@ const dispatch = await executeVerb("dispatch", {
 if (!dispatch.dispatched) throw new Error("canonical dispatch failed");
 writeFileSync(path.join(state, "dispatch-result.json"), JSON.stringify(dispatch, null, 2) + "\n");
 append("dispatch-task", "task_dispatched", {
-  task_id: taskId, repo: project, worktree, branch: "fm/rehydration-task", harness: dispatch.harness,
+  task_id: taskId, repo: project, worktree, branch: `fm/${taskId}`, harness: dispatch.harness,
 });
 append("worktree-task", "worktree_created", {
-  task_id: taskId, repo: project, worktree, branch: "fm/rehydration-task",
+  task_id: taskId, repo: project, worktree, branch: `fm/${taskId}`,
 });
 append("progress-task", "phase_transition", {
-  phase: "worker-progress", task_id: taskId, next_action: "Resolve the open synthetic-task hold",
+  phase: "worker-progress", task_id: taskId, next_action: nextAction,
 });
 append("complete-task", "task_completed", { task_id: taskId });
 append("execution-done-task", "delivery_state_changed", {
   task_id: taskId, delivery_state: "EXECUTION_DONE", evidence: { status: "done" },
 });
 append("open-task-hold", "captain_hold_created", {
-  task_id: taskId, hold_id: "rehydration-hold", backlog_pointer: "data/backlog.md#rehydration-task",
+  task_id: taskId, hold_id: holdId, backlog_pointer: `data/backlog.md#${taskId}`,
 });
 writeFileSync(path.join(state, "supervisor-a-ready"), "ready\n");
 setInterval(() => {}, 1000);
