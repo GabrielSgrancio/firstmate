@@ -53,8 +53,10 @@
 #   RouteTarget. Relaunch preserves these fields from the existing task record.
 #   --manual-override <reason> is the audited escape hatch from router dispatch
 #   authority for a fresh crewmate or scout: the explicit harness/model choice is
-#   recorded as decision_type=manual_override with the reason, and with
-#   --data-class the choice must still pass the data policy. Where
+#   recorded as decision_type=manual_override with the reason, it must name a
+#   catalogued route in a subscription pool that is not credit-gated, and with
+#   --data-class the choice must still pass the data policy. --data-class SECRET
+#   is refused for every spawn. Where
 #   config/router-authority is enforced (the default in a home carrying
 #   config/model-registry.json), a fresh crewmate or scout spawn needs either a
 #   router selection that `fm-router-v2.mjs verify-provenance` finds in the
@@ -594,6 +596,14 @@ fi
 case "$EFFORT" in
   ''|low|medium|high|xhigh|max) ;;
   *) echo "error: --effort must be one of low, medium, high, xhigh, max" >&2; exit 1 ;;
+esac
+# SECRET is excluded from every model context, so it is refused here for every
+# spawn path (router provenance, manual override, advisory legacy, relaunch)
+# before any endpoint or task record exists.
+case "$DATA_CLASS" in
+  ''|PUBLIC|SANITIZED|PRIVATE_CODE|PERSONAL_SENSITIVE) ;;
+  SECRET) echo "error: SECRET data is strictly excluded from all model context; no worker may be spawned with --data-class SECRET" >&2; exit 1 ;;
+  *) echo "error: --data-class must be one of PUBLIC, SANITIZED, PRIVATE_CODE, PERSONAL_SENSITIVE (got '$DATA_CLASS')" >&2; exit 1 ;;
 esac
 
 # --relaunch reuses an existing task's endpoint, worktree, project, and kind,
@@ -1761,13 +1771,21 @@ if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ]; then
   if [ "$ROUTE_EXECUTION_ID_SET" -eq 1 ]; then
     if [ "$ROUTER_AUTHORITY" = enforced ] && ! router_provenance=$(FM_HOME="$FM_HOME" node "$FM_ROOT/bin/fm-router-v2.mjs" verify-provenance \
         --task-id "$ID" --route-execution-id "$ROUTE_EXECUTION_ID" --route-id "${ROUTE_ID:-}" \
-        --harness "$HARNESS" --model "${MODEL:-default}" 2>&1); then
+        --harness "$HARNESS" --model "${MODEL:-default}" --data-class "${DATA_CLASS:-}" --effort "${EFFORT:-default}" 2>&1); then
       echo "error: router dispatch authority is enforced and this spawn's router selection could not be verified: $router_provenance" >&2
       exit 1
     fi
   elif [ "$MANUAL_OVERRIDE_SET" -eq 1 ]; then
     if [ "$ROUTER_AUTHORITY" = enforced ] && [ -z "$DATA_CLASS" ]; then
       echo "error: a manual override under enforced router authority needs --data-class so the data policy still applies" >&2
+      exit 1
+    fi
+    # Only already-paid subscription capacity may run, whatever the authority
+    # mode or data class: the override must name a catalogued subscription route,
+    # so a custom command, whose capacity cannot be verified, is refused too.
+    if ! override_spend=$(FM_HOME="$FM_HOME" node "$FM_ROOT/bin/fm-router-v2.mjs" override-spend-gate \
+        --harness "$HARNESS" --model "${MODEL:-default}" 2>&1); then
+      echo "error: manual override refused by the subscription-only spend policy: $override_spend" >&2
       exit 1
     fi
     if [ -n "$DATA_CLASS" ] && ! override_gate=$(FM_HOME="$FM_HOME" node "$FM_ROOT/bin/fm-router-v2.mjs" override-gate \

@@ -554,7 +554,7 @@ esac
     );
     assert.match(
       spawnRefused([taskIdB, repoDir, '--scout', 'bash -c "sleep 1"', '--backend', 'tmux',
-        '--route-id', 'codex:gpt-5.6-terra:medium', '--route-execution-id', 'rex-forged-1']),
+        '--route-id', 'codex:gpt-5.6-terra:medium', '--route-execution-id', 'rex-forged-1', '--data-class', 'PUBLIC']),
       /router selection could not be verified: .*no router selection is recorded/
     );
     assert.match(
@@ -564,8 +564,31 @@ esac
     assert.match(
       spawnRefused([taskIdB, repoDir, '--scout', '--harness', 'codex', '--backend', 'tmux',
         '--manual-override', 'captain picked it', '--data-class', 'SECRET']),
-      /manual override refused by data policy/
+      /SECRET data is strictly excluded/
     );
+    assert.match(
+      spawnRefused([taskIdB, repoDir, '--scout', '--harness', 'claude', '--model', 'claude-fable-5-1', '--backend', 'tmux',
+        '--manual-override', 'captain picked it', '--data-class', 'PUBLIC']),
+      /refused by the subscription-only spend policy/
+    );
+    assert.match(
+      spawnRefused([taskIdB, repoDir, '--scout', '--harness', 'opencode', '--model', 'opencode-go/payg-sentinel-model', '--backend', 'tmux',
+        '--manual-override', 'captain picked it', '--data-class', 'PRIVATE_CODE']),
+      /refused by the subscription-only spend policy/
+    );
+    // A recorded PUBLIC router selection cannot be replayed as a SECRET or
+    // differently classified spawn.
+    router.ingressDispatchStarted({
+      taskId: 'replayed-provenance-e2e', routeExecutionId: 'rex-replayed-public', path: 'A',
+      dataClass: 'PUBLIC', quotaSnapshotBefore: {}, routeDecision: { decision_type: 'router_v2' },
+      selectedRouteId: 'codex:gpt-5.6-terra:medium', selectedHarness: 'codex', selectedModel: 'gpt-5.6-terra',
+      selectedEffort: 'medium'
+    });
+    const replay = (dataClass) => ['replayed-provenance-e2e', repoDir, '--scout', '--harness', 'codex', '--model', 'gpt-5.6-terra',
+      '--effort', 'medium', '--backend', 'tmux', '--route-id', 'codex:gpt-5.6-terra:medium',
+      '--route-execution-id', 'rex-replayed-public', '--data-class', dataClass];
+    assert.match(spawnRefused(replay('SECRET')), /SECRET data is strictly excluded/);
+    assert.match(spawnRefused(replay('PRIVATE_CODE')), /router selection could not be verified: .*data class PUBLIC/);
     assert.ok(!fs.existsSync(path.join(realHome, 'state', `${taskIdB}.meta`)), 'refused spawns create no task record');
 
     // Advisory authority keeps the legacy path.
@@ -604,7 +627,7 @@ esac
     fs.writeFileSync(currentWtFile, wtO);
     const spawnOutO = execFileSync(
       'bash',
-      [SPAWN_SH, taskIdO, repoDir, '--scout', 'bash -c "sleep 1"', '--backend', 'tmux',
+      [SPAWN_SH, taskIdO, repoDir, '--scout', '--harness', 'codex', '--model', 'gpt-5.6-terra', '--backend', 'tmux',
         '--manual-override', 'captain chose this worker explicitly', '--data-class', 'PUBLIC'],
       { encoding: 'utf8', env: realEnv, stdio: 'pipe' }
     );

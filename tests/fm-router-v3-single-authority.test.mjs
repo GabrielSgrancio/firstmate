@@ -36,6 +36,11 @@ writePriors({
 assert.throws(() => route(), /seed prior is for harness opencode/, 'a prior for another harness is not borrowed');
 
 writePriors({
+  'gpt-5.6-terra': { prior_mean: 0.93, prior_effective_n: 40, recommended_roles: ['general_engineer'] }
+});
+assert.throws(() => route(), /seed prior does not name a harness/, 'a prior must name its harness to be admitted');
+
+writePriors({
   'gpt-5.6-terra': { harness: 'codex', prior_mean: 0.93, prior_effective_n: 40, recommended_roles: ['autonomous_engineer'] }
 });
 assert.throws(() => route(), /seed prior does not recommend role general_engineer/);
@@ -96,7 +101,8 @@ router.ingressDispatchStarted({
   quotaSnapshotBefore: {},
   selectedRouteId: 'codex:gpt-5.6-terra:medium',
   selectedHarness: 'codex',
-  selectedModel: 'gpt-5.6-terra'
+  selectedModel: 'gpt-5.6-terra',
+  selectedEffort: 'medium'
 });
 router.ingressDispatchStarted({
   taskId: 'manual-task',
@@ -113,6 +119,8 @@ const verify = (overrides) => router.verifyRouterProvenance({
   routeId: 'codex:gpt-5.6-terra:medium',
   harness: 'codex',
   model: 'gpt-5.6-terra',
+  dataClass: 'PUBLIC',
+  effort: 'medium',
   ...overrides
 });
 assert.equal(verify().verified, true);
@@ -122,6 +130,12 @@ assert.match(verify({ routeId: 'codex:gpt-5.6-sol:high' }).reason, /route codex:
 assert.match(verify({ routeExecutionId: 'rex-unknown' }).reason, /no router selection/);
 assert.equal(verify({ taskId: 'manual-task', routeExecutionId: 'rex-manual-1' }).verified, false,
   'a legacy record is not router provenance');
+// A recorded PUBLIC selection cannot be replayed under another data class or effort.
+assert.match(verify({ dataClass: 'PRIVATE_CODE' }).reason, /data class PUBLIC/);
+assert.match(verify({ dataClass: 'SECRET' }).reason, /SECRET data is strictly excluded/);
+assert.equal(verify({ dataClass: null }).verified, false, 'provenance needs the spawn data class');
+assert.match(verify({ effort: 'max' }).reason, /effort medium/);
+assert.match(verify({ effort: 'default' }).reason, /effort medium/);
 
 // The manual override keeps the data policy.
 const gate = (overrides) => router.evaluateManualOverrideDataGate({ harness: 'codex', dataClass: 'PRIVATE_CODE', ...overrides });
@@ -131,7 +145,27 @@ assert.equal(gate({ dataClass: 'UNKNOWN' }).allowed, false);
 const agyRoute = routes.find((candidate) => candidate.harness === 'antigravity' && candidate.data_profile === 'gemini_consumer');
 assert.ok(agyRoute, 'fixture must carry a gemini_consumer route');
 assert.match(gate({ harness: 'antigravity', dataClass: 'PERSONAL_SENSITIVE' }).reason, /blocked on route profile gemini_consumer/);
-assert.equal(gate({ harness: 'unlisted-tool', dataClass: 'PUBLIC' }).allowed, true);
 assert.equal(gate({ harness: 'unlisted-tool', dataClass: 'PERSONAL_SENSITIVE' }).allowed, false);
+
+// The manual override only reaches already-paid subscription capacity.
+const spend = (overrides) => router.evaluateManualOverrideSpendGate({ harness: 'codex', ...overrides });
+assert.equal(spend().allowed, true);
+assert.equal(spend({ model: 'gpt-5.6-terra' }).allowed, true);
+assert.equal(spend({ harness: 'opencode', model: 'opencode-go/qwen3.8-flash' }).allowed, true);
+assert.equal(spend({ harness: 'claude', model: 'claude-opus-5' }).allowed, true);
+const fable = gate({ harness: 'claude', model: 'claude-fable-5-1', dataClass: 'PUBLIC' });
+assert.equal(fable.allowed, false, 'a credit-gated route is refused even when the data class is permitted');
+assert.match(fable.reason, /subscription pool/);
+assert.equal(spend({ harness: 'claude', model: 'claude-fable-5-1' }).allowed, false);
+for (const uncatalogued of ['opencode-go/payg-sentinel-model', 'anthropic/claude-opus-5-api', 'claude-fable-5-1']) {
+  assert.equal(gate({ harness: 'opencode', model: uncatalogued, dataClass: 'PRIVATE_CODE' }).allowed, false,
+    `uncatalogued opencode model ${uncatalogued} is refused`);
+}
+assert.equal(gate({ harness: 'unlisted-tool', dataClass: 'PUBLIC' }).allowed, false, 'a harness with no subscription route is refused');
+// A route catalogued outside the five pools is refused even if the model also has a subscription route.
+const catalogBackup = fs.readFileSync(routesPath, 'utf8');
+fs.writeFileSync(routesPath, JSON.stringify([...routes, { ...terraRoute, route_id: 'codex:gpt-5.6-terra:payg', quota_pool: 'openai_api_payg' }]));
+assert.match(spend({ model: 'gpt-5.6-terra' }).reason, /outside subscription capacity on codex:gpt-5\.6-terra:payg/);
+fs.writeFileSync(routesPath, catalogBackup);
 
 console.log('Router V3 single-authority regressions passed');

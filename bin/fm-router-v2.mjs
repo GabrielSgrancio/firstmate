@@ -326,7 +326,8 @@ export function seedPriorAdmission({ route, role, critical = false, priors = nul
   }
   const prior = priorForRoute(route, priors);
   if (!prior) return { admitted: false, reason: 'no seed prior for this route' };
-  if (prior.harness && prior.harness !== route.harness) {
+  if (!prior.harness) return { admitted: false, reason: 'seed prior does not name a harness' };
+  if (prior.harness !== route.harness) {
     return { admitted: false, reason: `seed prior is for harness ${prior.harness}` };
   }
   if (!Array.isArray(prior.recommended_roles) || !prior.recommended_roles.includes(role)) {
@@ -1413,12 +1414,8 @@ export function dispatchThroughHerdr({
   if (contextPack.provenance?.cache_key) {
     spawnArgs.push('--context-pack', path.join(currentFmHome(), 'state', 'context-cache', `${contextPack.provenance.cache_key}.json`));
   }
-  if (selectedRoute.reasoning_effort) {
-    const effort = selectedRoute.reasoning_effort === 'ultra' ? 'max' : selectedRoute.reasoning_effort;
-    if (['low', 'medium', 'high', 'xhigh', 'max'].includes(effort)) {
-      spawnArgs.push('--effort', effort);
-    }
-  }
+  const spawnEffort = spawnEffortForRoute(selectedRoute.reasoning_effort);
+  if (spawnEffort) spawnArgs.push('--effort', spawnEffort);
   spawnArgs.push('--backend', backend);
 
   let spawnResult;
@@ -1738,10 +1735,22 @@ export function teardownTask(taskId, { force = false } = {}) {
 
 // Router dispatch provenance: fm-spawn accepts a fresh worker as router-selected
 // only when the executions log already holds this task's router_v2 selection for
-// the same execution, route, and harness.  Passing the flags by hand is not enough.
-export function verifyRouterProvenance({ taskId, routeExecutionId, routeId, harness, model = null } = {}) {
+// the same execution, route, harness, model, data class, and effort.  Passing the
+// flags by hand is not enough, and SECRET is refused even with a matching record.
+function spawnEffortForRoute(effort) {
+  const mapped = effort === 'ultra' ? 'max' : effort;
+  return ['low', 'medium', 'high', 'xhigh', 'max'].includes(mapped) ? mapped : null;
+}
+
+export function verifyRouterProvenance({ taskId, routeExecutionId, routeId, harness, model = null, dataClass = null, effort = null } = {}) {
   if (!taskId || !routeExecutionId || !routeId || !harness) {
     return { verified: false, reason: 'task id, route execution id, route id, and harness are all required' };
+  }
+  if (!dataClass || !ACTIVE_DATA_CLASSES.has(dataClass)) {
+    return { verified: false, reason: `a router-selected spawn needs a known data class, got ${dataClass || 'none'}` };
+  }
+  if (dataClass === 'SECRET') {
+    return { verified: false, reason: 'SECRET data is strictly excluded from all model context under any provider' };
   }
   const selection = readRoutingTelemetryRecords().find((record) =>
     record.route_execution_id === routeExecutionId &&
@@ -1755,15 +1764,69 @@ export function verifyRouterProvenance({ taskId, routeExecutionId, routeId, harn
   if (selection.selected_route_id !== routeId) mismatches.push(`route ${selection.selected_route_id}`);
   if (selection.selected_harness !== harness) mismatches.push(`harness ${selection.selected_harness}`);
   if (model && selection.selected_model !== model) mismatches.push(`model ${selection.selected_model}`);
+  if (selection.data_class !== dataClass) mismatches.push(`data class ${selection.data_class}`);
+  const requestedEffort = effort && effort !== 'default' ? effort : null;
+  if (spawnEffortForRoute(selection.selected_effort) !== requestedEffort) {
+    mismatches.push(`effort ${selection.selected_effort || 'default'}`);
+  }
   if (mismatches.length > 0) {
     return { verified: false, reason: `recorded router selection differs: ${mismatches.join(', ')}` };
   }
   return { verified: true, reason: 'router selection recorded' };
 }
 
-// A manual override replaces the router's route choice, never the data policy.
-// The chosen harness (and model, when concrete) is matched against the compiled
-// catalog regardless of its age, because data profiles do not go stale with quota.
+function readCompiledRouteCatalog() {
+  try {
+    const routes = JSON.parse(fs.readFileSync(homePath('data/provider-catalogs/compiled-route-targets.json'), 'utf8'));
+    return Array.isArray(routes) ? routes : [];
+  } catch {
+    return [];
+  }
+}
+
+function routeIsSubscriptionCapacity(route) {
+  return RESOURCE_POOLS.includes(routePoolName(route)) &&
+    route.availability !== 'credit_gated' && route.routing_status !== 'CREDIT_GATED';
+}
+
+// A manual override replaces the router's route choice, never the spend policy:
+// only already-paid subscription capacity in the five resource pools may run.
+// A concrete model must match a catalogued subscription route, and every
+// catalogued route for that model must be subscription capacity, so an
+// uncatalogued or credit-gated model string cannot slip through.  With no
+// concrete model the harness must carry subscription routes and runs its own
+// default login.
+export function evaluateManualOverrideSpendGate({ harness, model = null } = {}) {
+  if (!harness) return { allowed: false, reason: 'a manual override needs a harness' };
+  const concreteModel = model && model !== 'default' ? model : null;
+  const matched = readCompiledRouteCatalog().filter((route) => route.harness === harness &&
+    (!concreteModel || route.resolved_runtime_model === concreteModel));
+  const label = `${harness}${concreteModel ? `/${concreteModel}` : ''}`;
+  const subscription = matched.filter(routeIsSubscriptionCapacity);
+  if (subscription.length === 0) {
+    return {
+      allowed: false,
+      reason: `${label} has no catalogued route in a subscription pool (${RESOURCE_POOLS.join(', ')}); credit-gated, pay-as-you-go, and uncatalogued capacity is refused`,
+      matched_routes: matched.map((route) => route.route_id)
+    };
+  }
+  if (concreteModel) {
+    const outside = matched.filter((route) => !routeIsSubscriptionCapacity(route));
+    if (outside.length > 0) {
+      return {
+        allowed: false,
+        reason: `${label} is catalogued outside subscription capacity on ${outside.map((route) => `${route.route_id} (pool ${route.quota_pool || 'none'}, ${route.availability || route.routing_status})`).join(', ')}`,
+        matched_routes: matched.map((route) => route.route_id)
+      };
+    }
+  }
+  return { allowed: true, reason: 'subscription capacity', matched_routes: subscription.map((route) => route.route_id) };
+}
+
+// A manual override replaces the router's route choice, never the data policy
+// or the spend policy.  The chosen harness (and model, when concrete) is matched
+// against the compiled catalog regardless of its age, because data profiles do
+// not go stale with quota.
 export function evaluateManualOverrideDataGate({ harness, model = null, dataClass } = {}) {
   if (!dataClass || !ACTIVE_DATA_CLASSES.has(dataClass)) {
     return { allowed: false, reason: `a manual override needs a known data class, got ${dataClass || 'none'}` };
@@ -1771,13 +1834,9 @@ export function evaluateManualOverrideDataGate({ harness, model = null, dataClas
   if (dataClass === 'SECRET') {
     return { allowed: false, reason: 'SECRET data is strictly excluded from all model context under any provider' };
   }
-  const compiledRoutesPath = homePath('data/provider-catalogs/compiled-route-targets.json');
-  let routes = [];
-  try {
-    routes = JSON.parse(fs.readFileSync(compiledRoutesPath, 'utf8'));
-  } catch {
-    routes = [];
-  }
+  const spend = evaluateManualOverrideSpendGate({ harness, model });
+  if (!spend.allowed) return spend;
+  const routes = readCompiledRouteCatalog();
   const concreteModel = model && model !== 'default' ? model : null;
   const matched = routes.filter((route) => route.harness === harness && route.data_profile &&
     (!concreteModel || route.resolved_runtime_model === concreteModel));
@@ -2035,7 +2094,9 @@ if (process.argv[1] && process.argv[1].endsWith('fm-router-v2.mjs')) {
       routeExecutionId: flags['route-execution-id'],
       routeId: flags['route-id'],
       harness: flags['harness'],
-      model: flags['model'] && flags['model'] !== 'default' ? flags['model'] : null
+      model: flags['model'] && flags['model'] !== 'default' ? flags['model'] : null,
+      dataClass: flags['data-class'] || null,
+      effort: flags['effort'] || null
     });
     console.log(JSON.stringify(res));
     process.exit(res.verified ? 0 : 1);
@@ -2046,6 +2107,11 @@ if (process.argv[1] && process.argv[1].endsWith('fm-router-v2.mjs')) {
       model: flags['model'] || null,
       dataClass: flags['data-class']
     });
+    console.log(JSON.stringify(res));
+    process.exit(res.allowed ? 0 : 1);
+  } else if (cmd === 'override-spend-gate') {
+    const flags = parseCliFlags(process.argv.slice(3));
+    const res = evaluateManualOverrideSpendGate({ harness: flags['harness'], model: flags['model'] || null });
     console.log(JSON.stringify(res));
     process.exit(res.allowed ? 0 : 1);
   } else if (cmd === 'catalog-refresh-if-stale') {
