@@ -38,6 +38,15 @@ Compiled catalogs and quota maps older than 24 hours are treated as stale, and m
 
 `bin/fm-quota-normalize.mjs` accepts quota-axi schema versions 3 and 5 and retains the source schema version in provenance.
 
+Live quota windows replace static quota-map windows; a provider that is omitted, stale, or not `known` leaves its pool `UNKNOWN` with no windows and no headroom, and an `auth_required` provider marks its pools `AUTH_REQUIRED` so Stage A refuses them.
+Stage C never scores unmeasured headroom and flags such routes `quota_evidence: unknown_low_confidence`.
+`USE_BEFORE_RESET` and expected unused quota at reset are bounded by the most binding window's surplus.
+Burn learning in `bin/fm-routing-economics.mjs` ignores deltas across a window reset or overlapping same-pool dispatches, requires `MIN_BURN_CALIBRATION_SAMPLES` clean pool samples, bounds each observation to `BURN_RATIO_BOUND` times the catalog burn, and shrinks toward the catalog burn with `BURN_PRIOR_WEIGHT`.
+An open execution holds a concurrency slot only while its task's `state/<task>.meta` exists, and a task holds at most one slot.
+Evaluator writes to `data/learned-routing.json` serialize on `data/learned-routing.json.lock`.
+For `HIGH_RISK_TASK_CLASSES` in `bin/fm-routing-capability.mjs`, Stage B keeps the floor on the posterior mean while Stage C ranks by the Beta posterior's conservative credible lower bound, so thin evidence cannot outrank deeper evidence on a marginally higher mean.
+`tests/fm-router-v3-enforcement-readiness.test.mjs` pins these guarantees.
+
 OpenCode Go discovery uses a child process environment for the bearer key and never interpolates credentials into a shell command or error message.
 
 Dispatch requires intake-provisioned task and brief state, invokes the existing `bin/fm-spawn.sh` lifecycle owner with `--backend herdr`, and appends routing receipts without taking ownership of backlog, lease, worktree, or continuity state.

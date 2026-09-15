@@ -9,6 +9,7 @@ function normalizeWindow(window) {
   const percentRemaining = window.percentRemaining ??
     (finitePercent(window.percentUsed) ? 100 - window.percentUsed : null);
   return {
+    id: typeof window.id === 'string' ? window.id : null,
     percent_remaining: finitePercent(percentRemaining) ? percentRemaining : null,
     percent_used: finitePercent(window.percentUsed) ? window.percentUsed : null,
     reset_at: window.resetsAt ?? window.resetAt ?? null

@@ -16,6 +16,11 @@ export const PROMOTION_REAL_N = 15;
 export const DEFAULT_PROMOTION_SUCCESS_RATE = 0.8;
 export const BOOTSTRAP_EXPLORATION_RATE = 0.18;
 export const STEADY_EXPLORATION_RATE = 0.05;
+// High-risk task classes rank by a conservative credible bound on P(success)
+// rather than the posterior point estimate, so thin evidence cannot outrank a
+// well-evidenced route on a marginally higher mean.
+export const HIGH_RISK_TASK_CLASSES = Object.freeze(['brownfield_debugging', 'architecture_reasoning', 'critical_audit']);
+export const HIGH_RISK_CREDIBLE_Z = 1.645;
 export const EXPLORATION_DATA_CLASSES = new Set(['PUBLIC', 'SANITIZED', 'PRIVATE_CODE']);
 
 export const TASK_CLASSES = Object.freeze({
@@ -139,7 +144,43 @@ export function routeModelName(route) {
   return route?.model_family || route?.raw_id || route?.logical_alias || route?.resolved_runtime_model;
 }
 
-function defaultUncertainty(realN, effectiveN, posteriorMean) {
+export function isHighRiskTaskClass(taskClass, critical = false) {
+  return critical || HIGH_RISK_TASK_CLASSES.includes(taskClass);
+}
+
+// Beta posterior over P(success): the record's prior contributes prior_mean *
+// prior_effective_n pseudo-successes, real outcomes add their counts, and a
+// uniform Beta(1,1) base keeps a short perfect streak from collapsing the width
+// to zero.  The lower bound is mean - z * sd of that same posterior.
+export function capabilityCredibleInterval({
+  priorMean = 0.5,
+  priorEffectiveN = 0,
+  realN = 0,
+  realSuccesses = 0,
+  z = HIGH_RISK_CREDIBLE_Z
+} = {}) {
+  const prior = Number.isFinite(priorMean) ? Math.min(1, Math.max(0, priorMean)) : 0.5;
+  const priorN = Number.isFinite(priorEffectiveN) && priorEffectiveN > 0 ? priorEffectiveN : 0;
+  const n = Number.isFinite(realN) && realN > 0 ? realN : 0;
+  const successes = Number.isFinite(realSuccesses) ? Math.min(n, Math.max(0, realSuccesses)) : 0;
+  const alpha = 1 + prior * priorN + successes;
+  const beta = 1 + (1 - prior) * priorN + (n - successes);
+  const total = alpha + beta;
+  const mean = alpha / total;
+  const sd = Math.sqrt((alpha * beta) / (total * total * (total + 1)));
+  return {
+    method: 'beta_posterior_credible_bound',
+    z,
+    alpha: Number(alpha.toFixed(6)),
+    beta: Number(beta.toFixed(6)),
+    mean: Number(mean.toFixed(6)),
+    sd: Number(sd.toFixed(6)),
+    lower_bound: Number(Math.max(0, mean - z * sd).toFixed(6)),
+    width: Number(Math.min(1, 2 * z * sd).toFixed(6))
+  };
+}
+
+function defaultUncertainty(realN, effectiveN, posteriorMean, realSuccesses = null, priorMean = null) {
   const totalN = realN + effectiveN;
   const standardError = totalN > 0
     ? Math.sqrt(Math.max(0, posteriorMean * (1 - posteriorMean)) / totalN)
@@ -149,6 +190,12 @@ function defaultUncertainty(realN, effectiveN, posteriorMean) {
     real_n: realN,
     effective_n: effectiveN,
     standard_error: Number(standardError.toFixed(6)),
+    credible: Number.isFinite(realSuccesses) ? capabilityCredibleInterval({
+      priorMean: Number.isFinite(priorMean) ? priorMean : posteriorMean,
+      priorEffectiveN: effectiveN,
+      realN,
+      realSuccesses
+    }) : undefined,
     status: realN === 0 ? 'untested' : 'measured'
   };
 }
@@ -196,7 +243,7 @@ export function updateCapabilityPosterior(record, criteria) {
     ? (record.prior_mean * record.prior_effective_n + record.real_successes) / posteriorDenominator
     : record.prior_mean;
   record.promotion_eligible_real_n = record.real_n >= criteria.minRealN;
-  record.uncertainty = defaultUncertainty(record.real_n, record.prior_effective_n, record.posterior_mean);
+  record.uncertainty = defaultUncertainty(record.real_n, record.prior_effective_n, record.posterior_mean, record.real_successes, record.prior_mean);
   return record;
 }
 

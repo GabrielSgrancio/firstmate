@@ -12,7 +12,9 @@ import {
   getCapabilityRecord,
   normalizeLearnedRouting,
   promotionCriteria,
-  familyPriorKey
+  familyPriorKey,
+  capabilityCredibleInterval,
+  isHighRiskTaskClass
 } from './fm-routing-capability.mjs';
 import {
   RESOURCE_POOLS,
@@ -32,6 +34,9 @@ const getExecutionsLogPath = () => homePath('data/routing-executions.jsonl');
 const OPENCODE_QUOTA_SCRIPT_PATH = path.join(ROOT, 'bin', 'fm-opencode-quota.mjs');
 
 function setPoolWindowsFresh(pool, fresh) {
+  // Windows that are not live evidence must not ride along into quota snapshots,
+  // where a before/after comparison would read them as real burn.
+  if (fresh === false) pool.windows = {};
   Object.defineProperty(pool, '_windows_fresh', {
     configurable: true,
     enumerable: false,
@@ -369,94 +374,65 @@ export function resolveLiveQuotaPools({ quotaOverrides = null, useLiveAxi = true
       });
       const data = normalizeQuotaAxiSnapshot(JSON.parse(axiOut));
       const providers = data.providers;
+      const liveUpdated = new Set();
+      // Replace, never merge: static quota-map windows are not live evidence and
+      // must not survive next to (or instead of) the provider's current windows.
+      const applyLive = (poolName, isUsable, effectiveItem, windows, providerStatus) => {
+        const pool = pools[poolName];
+        if (!pool) return;
+        liveUpdated.add(poolName);
+        const rem = isUsable ? effectiveItem?.effectivePercentRemaining : null;
+        const scarcity = deriveScarcity(rem);
+        const windowsKnown = Object.values(windows).some((w) => Number.isFinite(w.percent_remaining));
+        if (scarcity === 'UNKNOWN' || !windowsKnown) {
+          pool.scarcity_state = 'UNKNOWN';
+          // Stage A refuses AUTH_REQUIRED pools; expired credentials are not merely unmeasured.
+          pool.status = providerStatus === 'auth_required' ? 'AUTH_REQUIRED' : 'UNKNOWN';
+          setPoolWindowsFresh(pool, false);
+          return;
+        }
+        pool.scarcity_state = scarcity;
+        pool.status = scarcity === 'EXHAUSTED' ? 'EXHAUSTED' : 'HEALTHY';
+        pool.windows = windows;
+        setPoolWindowsFresh(pool, true);
+      };
 
       for (const p of providers) {
         const name = p.provider;
         const pState = p.state || {};
         const isFresh = pState.status === 'fresh' || pState.status === 'cached' || (!pState.stale && pState.status !== 'auth_required' && pState.status !== 'error');
         const semantics = p.quotaSemantics || {};
-        const isKnown = semantics.status === 'known';
+        const isUsable = isFresh && semantics.status === 'known';
         const effList = semantics.effectiveAvailability || [];
 
         const windowMap = {};
         for (const w of (p.windows || [])) {
+          if (!w.id) continue;
           windowMap[w.id] = {
-            percent_remaining: w.percentRemaining,
-            reset_at: w.resetsAt
+            percent_remaining: w.percent_remaining,
+            reset_at: w.reset_at
           };
-          if (w.id === 'five_hour') windowMap['rolling_5h'] = windowMap[w.id];
         }
+        const windowsWithPrefix = (prefix) => Object.fromEntries(Object.entries(windowMap).filter(([k]) => k.startsWith(prefix)));
 
         if (name === 'codex') {
-          if (pools.codex_plus) {
-            if (isFresh && isKnown) {
-              const item = effList.find(e => e.scope === 'all_models') || effList[0];
-              const rem = item?.effectivePercentRemaining;
-              pools.codex_plus.scarcity_state = deriveScarcity(rem);
-              pools.codex_plus.status = pools.codex_plus.scarcity_state === 'EXHAUSTED' ? 'EXHAUSTED' : 'HEALTHY';
-              pools.codex_plus.windows = { ...(pools.codex_plus.windows || {}), ...windowMap };
-              setPoolWindowsFresh(pools.codex_plus, true);
-            } else {
-              pools.codex_plus.scarcity_state = 'UNKNOWN';
-              pools.codex_plus.status = 'UNKNOWN';
-              setPoolWindowsFresh(pools.codex_plus, false);
-            }
-          }
+          applyLive('codex_plus', isUsable, effList.find(e => e.scope === 'all_models') || effList[0], windowMap, pState.status);
         } else if (name === 'claude') {
-          if (pools.claude_pro) {
-            if (isFresh && isKnown) {
-              const item = effList.find(e => e.scope === 'all_models') || effList[0];
-              const rem = item?.effectivePercentRemaining;
-              pools.claude_pro.scarcity_state = deriveScarcity(rem);
-              pools.claude_pro.status = pools.claude_pro.scarcity_state === 'EXHAUSTED' ? 'EXHAUSTED' : 'HEALTHY';
-              pools.claude_pro.windows = { ...(pools.claude_pro.windows || {}), ...windowMap };
-              setPoolWindowsFresh(pools.claude_pro, true);
-            } else {
-              pools.claude_pro.scarcity_state = 'UNKNOWN';
-              pools.claude_pro.status = 'UNKNOWN';
-              setPoolWindowsFresh(pools.claude_pro, false);
-            }
-          }
+          applyLive('claude_pro', isUsable, effList.find(e => e.scope === 'all_models') || effList[0], windowMap, pState.status);
           if (pools.claude_pro_credits) {
             pools.claude_pro_credits.scarcity_state = 'UNKNOWN';
           }
         } else if (name === 'antigravity') {
-          if (pools.antigravity_gemini) {
-            if (isFresh && isKnown) {
-              const geminiItem = effList.find(e => e.scope === 'gemini');
-              const rem = geminiItem ? geminiItem.effectivePercentRemaining : null;
-              pools.antigravity_gemini.scarcity_state = deriveScarcity(rem);
-              pools.antigravity_gemini.status = pools.antigravity_gemini.scarcity_state === 'EXHAUSTED' ? 'EXHAUSTED' : 'HEALTHY';
-              const geminiWindows = {};
-              for (const [k, v] of Object.entries(windowMap)) {
-                if (k.startsWith('gemini')) geminiWindows[k] = v;
-              }
-              pools.antigravity_gemini.windows = { ...(pools.antigravity_gemini.windows || {}), ...geminiWindows };
-              setPoolWindowsFresh(pools.antigravity_gemini, true);
-            } else {
-              pools.antigravity_gemini.scarcity_state = 'UNKNOWN';
-              pools.antigravity_gemini.status = 'UNKNOWN';
-              setPoolWindowsFresh(pools.antigravity_gemini, false);
-            }
-          }
-          if (pools.antigravity_3p) {
-            if (isFresh && isKnown) {
-              const p3Item = effList.find(e => e.scope === '3p');
-              const rem = p3Item ? p3Item.effectivePercentRemaining : null;
-              pools.antigravity_3p.scarcity_state = deriveScarcity(rem);
-              pools.antigravity_3p.status = pools.antigravity_3p.scarcity_state === 'EXHAUSTED' ? 'EXHAUSTED' : 'HEALTHY';
-              const p3Windows = {};
-              for (const [k, v] of Object.entries(windowMap)) {
-                if (k.startsWith('3p')) p3Windows[k] = v;
-              }
-              pools.antigravity_3p.windows = { ...(pools.antigravity_3p.windows || {}), ...p3Windows };
-              setPoolWindowsFresh(pools.antigravity_3p, true);
-            } else {
-              pools.antigravity_3p.scarcity_state = 'UNKNOWN';
-              pools.antigravity_3p.status = 'UNKNOWN';
-              setPoolWindowsFresh(pools.antigravity_3p, false);
-            }
-          }
+          applyLive('antigravity_gemini', isUsable, effList.find(e => e.scope === 'gemini'), windowsWithPrefix('gemini'), pState.status);
+          applyLive('antigravity_3p', isUsable, effList.find(e => e.scope === '3p'), windowsWithPrefix('3p'), pState.status);
+        }
+      }
+      // A pool the live adapter did not report has no live evidence at all.
+      for (const k of ['codex_plus', 'claude_pro', 'antigravity_gemini', 'antigravity_3p']) {
+        if (pools[k] && !liveUpdated.has(k)) {
+          pools[k].scarcity_state = 'UNKNOWN';
+          pools[k].status = 'UNKNOWN';
+          setPoolWindowsFresh(pools[k], false);
         }
       }
     } catch (err) {
@@ -537,14 +513,34 @@ export function qualityFloorForTask({ taskClass, critical = false, qualityFloor 
   return critical ? Math.max(configured, 0.96) : configured;
 }
 
-function readRoutingTelemetryRecords() {
-  const logPath = getExecutionsLogPath();
-  if (!fs.existsSync(logPath)) return [];
+// The executions log is appended by concurrent dispatchers, so a reader can see
+// a partially written final line.  Skip only unparseable lines; one torn record
+// must not erase every burn observation and active-concurrency count.
+export function readRoutingTelemetryRecords(logPath = getExecutionsLogPath()) {
+  let text;
   try {
-    return fs.readFileSync(logPath, 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line));
+    text = fs.readFileSync(logPath, 'utf8');
   } catch (_) {
     return [];
   }
+  const records = [];
+  for (const line of text.split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      records.push(JSON.parse(line));
+    } catch (_) {
+      // torn or corrupt line
+    }
+  }
+  return records;
+}
+
+// An open execution holds a concurrency slot only while its task still has a
+// live task record; teardown removes state/<task>.meta.
+function executionTaskStillLive(records) {
+  const taskId = records.find((record) => record?.task_id)?.task_id;
+  if (typeof taskId !== 'string' || !/^[A-Za-z0-9._-]+$/.test(taskId)) return false;
+  return fs.existsSync(homePath(path.join('state', `${taskId}.meta`)));
 }
 
 function routePoolName(route) {
@@ -581,20 +577,37 @@ function qualityEvidence(candidate, selectedTaskClass, learned, priors) {
     return {
       quality: Math.min(0.999, Math.max(0.01, direct.posterior_mean)),
       source: direct.real_n > 0 ? 'real_capability' : 'capability_prior',
-      real_n: direct.real_n || 0
+      real_n: direct.real_n || 0,
+      real_successes: Number.isFinite(direct.real_successes) ? direct.real_successes : 0,
+      prior_mean: Number.isFinite(direct.prior_mean) ? direct.prior_mean : direct.posterior_mean,
+      prior_effective_n: Number.isFinite(direct.prior_effective_n) ? direct.prior_effective_n : 0
     };
   }
   const familyPrior = familyPriorKey(candidate.route)
     ? learned?.model_family_priors?.[familyPriorKey(candidate.route)]?.[selectedTaskClass]
     : null;
   if (Number.isFinite(familyPrior?.prior_mean)) {
-    return { quality: familyPrior.prior_mean, source: 'family_prior', real_n: 0 };
+    return {
+      quality: familyPrior.prior_mean,
+      source: 'family_prior',
+      real_n: 0,
+      real_successes: 0,
+      prior_mean: familyPrior.prior_mean,
+      prior_effective_n: Number.isFinite(familyPrior.prior_effective_n) ? familyPrior.prior_effective_n : 0
+    };
   }
   const externalPrior = priorForRoute(candidate.route, priors);
   if (Number.isFinite(externalPrior?.prior_mean)) {
-    return { quality: externalPrior.prior_mean, source: 'seed_prior', real_n: 0 };
+    return {
+      quality: externalPrior.prior_mean,
+      source: 'seed_prior',
+      real_n: 0,
+      real_successes: 0,
+      prior_mean: externalPrior.prior_mean,
+      prior_effective_n: Number.isFinite(externalPrior.prior_effective_n) ? externalPrior.prior_effective_n : 0
+    };
   }
-  return { quality: 0.50, source: 'untested', real_n: 0 };
+  return { quality: 0.50, source: 'untested', real_n: 0, real_successes: 0, prior_mean: 0.5, prior_effective_n: 0 };
 }
 
 export function stageAHardRequirements({
@@ -674,11 +687,25 @@ export function stageBQualityGate({
   priors = null
 } = {}) {
   const floor = qualityFloorForTask({ taskClass, critical, qualityFloor });
+  const highRisk = isHighRiskTaskClass(taskClass, critical);
   const survivors = [];
   const rejected = [];
   for (const candidate of candidates) {
     const evidence = qualityEvidence(candidate, taskClass, learned, priors);
-    const enriched = { ...candidate, qualityScore: evidence.quality, qualityEvidence: evidence };
+    evidence.credible = capabilityCredibleInterval({
+      priorMean: evidence.prior_mean,
+      priorEffectiveN: evidence.prior_effective_n,
+      realN: evidence.real_n,
+      realSuccesses: evidence.real_successes
+    });
+    // The floor stays on the posterior mean; high-risk classes carry the
+    // conservative bound into Stage C so evidence depth, not a marginal mean, ranks.
+    const successProbability = highRisk
+      ? Math.min(evidence.quality, Math.max(0.01, evidence.credible.lower_bound))
+      : evidence.quality;
+    evidence.high_risk = highRisk;
+    evidence.success_probability = successProbability;
+    const enriched = { ...candidate, qualityScore: evidence.quality, successProbability, qualityEvidence: evidence };
     if (evidence.quality < floor) {
       rejected.push({
         route_id: candidate.route.route_id,
@@ -734,7 +761,9 @@ export function scoreAndSelectRoute({
   // Use one intake quota snapshot for all three stages.
   const liveQuota = resolveLiveQuotaPools({ quotaOverrides, useLiveAxi });
   const candidateRoutes = capabilityQuery.candidates.map(candidate => candidate.route);
-  const quotaEconomics = collectRoutingObservations(telemetryRecords || readRoutingTelemetryRecords(), compiledRoutes, now);
+  const quotaEconomics = collectRoutingObservations(telemetryRecords || readRoutingTelemetryRecords(), compiledRoutes, now, {
+    isActive: telemetryRecords ? null : executionTaskStillLive
+  });
   const poolEconomics = buildPoolEconomics({ pools: liveQuota, observations: quotaEconomics, now });
   const stageA = stageAHardRequirements({
     candidates: capabilityQuery.candidates,
@@ -771,7 +800,7 @@ export function scoreAndSelectRoute({
       poolEconomics,
       observations: quotaEconomics,
       candidateBasis: candidate.candidateBasis,
-      successProbability: candidate.qualityScore,
+      successProbability: candidate.successProbability ?? candidate.qualityScore,
       effortFitScore: effortFit,
       now
     });
@@ -847,6 +876,8 @@ export function scoreAndSelectRoute({
       real_n: s.real_n,
       quality: s.qualityScore,
       quality_source: s.qualityEvidence.source,
+      quality_credible_lower_bound: s.qualityEvidence.credible?.lower_bound ?? null,
+      quality_credible_width: s.qualityEvidence.credible?.width ?? null,
       pool: s.economics.resource_pool,
       surplus: s.economics.surplus,
       pressure: s.economics.pressure,

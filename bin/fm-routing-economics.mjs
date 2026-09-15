@@ -16,6 +16,13 @@ const POOL_SCARCITY_RANK = {
   UNKNOWN: 4
 };
 
+// Burn learning trusts real quota deltas only after enough clean samples, and a
+// single observation can move a route at most a bounded factor from its catalog
+// burn before shrinkage toward that catalog value.
+export const MIN_BURN_CALIBRATION_SAMPLES = 3;
+export const BURN_PRIOR_WEIGHT = 3;
+export const BURN_RATIO_BOUND = 4;
+
 export const RESOURCE_POOLS = [
   'claude_pro',
   'codex_plus',
@@ -166,6 +173,13 @@ export function calculateObservedQuotaDelta(before, after, poolName) {
     const beforeRemaining = remainingPercent(beforeWindow);
     const afterRemaining = remainingPercent(afterWindow);
     if (!finite(beforeRemaining) || !finite(afterRemaining)) continue;
+    const beforeReset = resetAt(beforeWindow);
+    const afterReset = resetAt(afterWindow);
+    // A window that reset mid-measurement mixes two budgets; its delta is not burn.
+    if (beforeReset && afterReset && String(beforeReset) !== String(afterReset)) {
+      const shift = Math.abs(new Date(afterReset).getTime() - new Date(beforeReset).getTime());
+      if (!Number.isFinite(shift) || shift > 60000) continue;
+    }
     const delta = beforeRemaining - afterRemaining;
     if (delta > 0) byWindow[windowKind(name) || name] = Number(delta.toFixed(6));
   }
@@ -178,7 +192,12 @@ export function calculateObservedQuotaDelta(before, after, poolName) {
   };
 }
 
-export function collectRoutingObservations(executions = [], routes = [], now = new Date()) {
+// isActive(records) lets the caller confirm an open execution is still a live
+// task; without it, open executions older than ACTIVE_EXECUTION_MAX_AGE_HOURS
+// are treated as orphaned.  Each task id holds at most one concurrency slot.
+export const ACTIVE_EXECUTION_MAX_AGE_HOURS = 24;
+
+export function collectRoutingObservations(executions = [], routes = [], now = new Date(), { isActive = null } = {}) {
   const records = Array.isArray(executions) ? executions.filter((record) => record && typeof record === 'object') : [];
   const routeById = new Map(routes.map((route) => [route.route_id, route]));
   const grouped = new Map();
@@ -193,6 +212,23 @@ export function collectRoutingObservations(executions = [], routes = [], now = n
   const byPool = {};
   const activeByPool = {};
   const nowMs = now instanceof Date ? now.getTime() : new Date(now).getTime();
+  // Pool meters are shared, so a before/after delta taken while another dispatch
+  // on the same pool was running cannot be attributed to one route.
+  const intervalsByPool = {};
+  for (const groupedRecords of grouped.values()) {
+    const routeId = routeIdForRecord(groupedRecords);
+    const started = groupedRecords.find((record) => record.dispatch_status === 'started') || groupedRecords[0];
+    const completed = groupedRecords.find((record) => record.dispatch_status === 'completed' || record.dispatch_status === 'launch_failed') || null;
+    const poolName = canonicalPoolName(routeById.get(routeId)?.quota_pool || started?.quota_pool || null);
+    if (!poolName) continue;
+    const start = eventTime(started);
+    if (start === null) continue;
+    const end = completed ? (eventTime(completed) ?? nowMs) : nowMs;
+    (intervalsByPool[poolName] ||= []).push({ id: executionId(started), start, end });
+  }
+  const overlapsSibling = (poolName, id, start, end) => (intervalsByPool[poolName] || [])
+    .some((other) => other.id !== id && other.start < end && start < other.end);
+  const activeByTask = new Map();
   for (const groupedRecords of grouped.values()) {
     const routeId = routeIdForRecord(groupedRecords);
     const route = routeById.get(routeId);
@@ -202,9 +238,15 @@ export function collectRoutingObservations(executions = [], routes = [], now = n
     const poolName = route?.quota_pool || started?.quota_pool || null;
     if (poolName && !completed) {
       const status = latest?.dispatch_status;
-      if (status === 'dispatched' || status === 'running') {
+      const lastSeen = Math.max(...groupedRecords.map(eventTime).filter(finite));
+      const live = typeof isActive === 'function'
+        ? isActive(groupedRecords)
+        : Number.isFinite(lastSeen) && nowMs - lastSeen <= ACTIVE_EXECUTION_MAX_AGE_HOURS * 3600000;
+      if ((status === 'dispatched' || status === 'running') && live) {
         const canonical = poolName.startsWith('opencode_go') ? 'opencode_go' : poolName;
-        activeByPool[canonical] = (activeByPool[canonical] || 0) + 1;
+        const taskId = groupedRecords.find((record) => record?.task_id)?.task_id || executionId(latest);
+        const previous = activeByTask.get(taskId);
+        if (!previous || previous.lastSeen < lastSeen) activeByTask.set(taskId, { pool: canonical, lastSeen });
       }
     }
     if (!routeId || !completed) continue;
@@ -218,7 +260,10 @@ export function collectRoutingObservations(executions = [], routes = [], now = n
       tokens: extractTokenUsage(completed) ?? extractTokenUsage(started),
       latency: startedAt !== null && completedAt !== null ? Math.max(0, (completedAt - startedAt) / 1000) : null,
       cache: extractCacheEfficiency(completed) ?? extractCacheEfficiency(started),
-      quotaDelta: calculateObservedQuotaDelta(started.quota_snapshot_before, completed.quota_snapshot_after, poolName),
+      quotaDelta: startedAt !== null && completedAt !== null &&
+        overlapsSibling(canonicalPoolName(poolName), executionId(started), startedAt, completedAt)
+        ? null
+        : calculateObservedQuotaDelta(started.quota_snapshot_before, completed.quota_snapshot_after, poolName),
       timestamp: completedAt ?? startedAt ?? nowMs
     };
     if (!byRoute[routeId]) byRoute[routeId] = aggregateForRoute();
@@ -235,6 +280,7 @@ export function collectRoutingObservations(executions = [], routes = [], now = n
       }
     }
   }
+  for (const { pool } of activeByTask.values()) activeByPool[pool] = (activeByPool[pool] || 0) + 1;
   return { byRoute, byPool, activeByPool };
 }
 
@@ -314,7 +360,8 @@ export function computeBudgetPacing({ windows, recentBurnVelocity = 0, now = new
     pressure: finite(pressure) ? pressure : 0,
     sustainable_burn_velocity: mean(values.map((value) => value.sustainable_burn_velocity).filter(finite)),
     reset_horizon_hours: Number.isFinite(resetHorizon) ? resetHorizon : null,
-    expected_unused_quota_at_reset: expiringSurplus.length ? Math.max(0, ...expiringSurplus) : null
+    // Unused-at-reset quota is bounded by the most binding window's surplus.
+    expected_unused_quota_at_reset: expiringSurplus.length ? Math.max(0, Math.min(...expiringSurplus)) : null
   };
 }
 
@@ -344,7 +391,10 @@ function poolState(pool, pacing) {
     finite(window.surplus) && window.surplus >= Math.max(5, window.actual_remaining * 0.1) &&
     (!finite(window.pressure) || window.pressure < 1.25)
   );
-  if (useBeforeReset && ['ABUNDANT', 'NORMAL'].includes(state)) state = 'USE_BEFORE_RESET';
+  // Expiring headroom is only spendable when no other window is behind pace;
+  // otherwise the binding longer window caps what the reset would waste.
+  const bindingSurplus = pacing.surplus;
+  if (useBeforeReset && finite(bindingSurplus) && bindingSurplus > 0 && ['ABUNDANT', 'NORMAL'].includes(state)) state = 'USE_BEFORE_RESET';
   return state;
 }
 
@@ -367,9 +417,7 @@ export function buildPoolEconomics({ pools = {}, observations = { byPool: {}, ac
     const latency = mean(poolObservation.latencyValues);
     const cacheEfficiency = mean(poolObservation.cacheValues);
     const actualTokenUsage = poolObservation.tokenValues.reduce((sum, value) => sum + value, 0);
-    const poolBurnScale = median(poolObservation.quotaDeltas
-      .filter((entry) => finite(entry.percent_points) && finite(entry.expected_normalized_burn) && entry.expected_normalized_burn > 0)
-      .map((entry) => entry.percent_points / entry.expected_normalized_burn));
+    const poolBurnScale = poolCalibrationScale(poolObservation);
     const observedQuotaDeltaPercent = mean(poolObservation.quotaDeltas.map((entry) => entry.percent_points));
     const observedNormalizedQuotaConsumption = finite(poolBurnScale) && poolBurnScale > 0 && finite(observedQuotaDeltaPercent)
       ? observedQuotaDeltaPercent / poolBurnScale
@@ -414,30 +462,47 @@ export function buildPoolEconomics({ pools = {}, observations = { byPool: {}, ac
   return output;
 }
 
+function poolCalibrationScale(poolObservation) {
+  const ratios = (poolObservation?.quotaDeltas || [])
+    .filter((entry) => finite(entry.percent_points) && finite(entry.expected_normalized_burn) && entry.expected_normalized_burn > 0)
+    .map((entry) => entry.percent_points / entry.expected_normalized_burn);
+  if (ratios.length < MIN_BURN_CALIBRATION_SAMPLES) return null;
+  const scale = median(ratios);
+  return finite(scale) && scale > 0 ? scale : null;
+}
+
+// Stage C compares routes across pools in normalized burn units.  Pool percent
+// points are converted to those units through the pool calibration scale; each
+// observation is bounded to a factor of the catalog burn and the median is shrunk
+// toward the catalog value, so one noisy delta cannot dominate.
 function routeObservationBurn(route, routeObservation, poolObservation) {
   const expected = finite(route?.expected_normalized_burn) && route.expected_normalized_burn > 0
     ? route.expected_normalized_burn
     : 1;
-  const ownDelta = mean((routeObservation?.quotaDeltas || []).map((entry) => entry.percent_points));
-  const calibration = (poolObservation?.quotaDeltas || [])
-    .filter((entry) => finite(entry.percent_points) && finite(entry.expected_normalized_burn) && entry.expected_normalized_burn > 0)
-    .map((entry) => entry.percent_points / entry.expected_normalized_burn);
-  const scale = median(calibration);
-  if (finite(ownDelta)) {
-    const normalized = finite(scale) && scale > 0 ? ownDelta / scale : ownDelta;
+  const ownDeltas = (routeObservation?.quotaDeltas || []).map((entry) => entry.percent_points).filter(finite);
+  const ownDelta = median(ownDeltas);
+  const scale = poolCalibrationScale(poolObservation);
+  if (finite(ownDelta) && finite(scale)) {
+    const bounded = ownDeltas.map((delta) => clamp(delta / scale, expected / BURN_RATIO_BOUND, expected * BURN_RATIO_BOUND));
+    const observedNormalized = median(bounded);
+    const n = bounded.length;
+    const normalized = (BURN_PRIOR_WEIGHT * expected + n * observedNormalized) / (BURN_PRIOR_WEIGHT + n);
     return {
       expected_quota_burn_per_attempt: normalized,
-      observed_normalized_quota_consumption: normalized,
+      observed_normalized_quota_consumption: observedNormalized,
       observed: true,
+      calibrated: true,
+      observation_count: n,
       observed_delta_percent: ownDelta
     };
   }
   return {
-    expected_quota_burn_per_attempt: finite(scale) ? expected * scale : expected,
+    expected_quota_burn_per_attempt: expected,
     observed_normalized_quota_consumption: null,
     observed: false,
     calibrated: finite(scale),
-    observed_delta_percent: null
+    observation_count: ownDeltas.length,
+    observed_delta_percent: finite(ownDelta) ? ownDelta : null
   };
 }
 
@@ -552,8 +617,12 @@ export function buildRouteEconomics({
     controlled_consumption_bonus: controlledConsumption,
     route_health: pool.route_health ?? 0.5,
     scarcity_state: pool.scarcity_state || 'UNKNOWN',
+    quota_evidence: finite(headroom) ? 'observed' : 'unknown_low_confidence',
     economic_score: economicScore,
-    burn_evidence: burn.observed ? 'real_quota_delta' : (burn.calibrated ? 'real_pool_quota_delta_calibrated' : 'catalog_expected_normalized_burn')
+    burn_observation_count: burn.observation_count,
+    burn_evidence: burn.observed
+      ? 'real_quota_delta'
+      : (burn.observation_count > 0 ? 'insufficient_pool_calibration_samples' : 'catalog_expected_normalized_burn')
   };
 }
 

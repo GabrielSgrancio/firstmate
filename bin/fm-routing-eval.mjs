@@ -72,6 +72,60 @@ function writeJsonAtomic(filePath, value) {
   fs.renameSync(temporary, filePath);
 }
 
+const LEARNED_LOCK_WAIT_MS = 30000;
+const LEARNED_LOCK_STALE_MS = 120000;
+
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function lockHolderAlive(lockPath) {
+  try {
+    const pid = Number(fs.readFileSync(lockPath, 'utf8').trim());
+    if (!Number.isInteger(pid) || pid <= 0) return false;
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error.code === 'EPERM';
+  }
+}
+
+// Every learned-state mutation is load-modify-write of one JSON document, so
+// concurrent evaluator processes serialize on an exclusive lock file; the atomic
+// rename alone only prevents torn files, not lost updates.
+export function withLearnedStateLock(fn, lockPath = `${LEARNED_PATH}.lock`) {
+  fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+  const deadline = Date.now() + LEARNED_LOCK_WAIT_MS;
+  let fd = null;
+  while (fd === null) {
+    try {
+      fd = fs.openSync(lockPath, 'wx', 0o600);
+      fs.writeSync(fd, `${process.pid}\n`);
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      let ageMs;
+      try {
+        ageMs = Date.now() - fs.statSync(lockPath).mtimeMs;
+      } catch (statError) {
+        if (statError.code === 'ENOENT') continue;
+        throw statError;
+      }
+      if (ageMs > LEARNED_LOCK_STALE_MS && !lockHolderAlive(lockPath)) {
+        fs.rmSync(lockPath, { force: true });
+        continue;
+      }
+      if (Date.now() > deadline) throw new Error(`learned routing state is locked by another writer: ${lockPath}`);
+      sleepSync(5 + Math.floor(Math.random() * 20));
+    }
+  }
+  try {
+    return fn();
+  } finally {
+    fs.closeSync(fd);
+    fs.rmSync(lockPath, { force: true });
+  }
+}
+
 function appendJsonLine(filePath, value) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.appendFileSync(filePath, `${JSON.stringify(value)}\n`, { mode: 0o600 });
@@ -244,6 +298,10 @@ function resolveRoleAndClass(route, options) {
 }
 
 export function smokeCandidate(options = {}) {
+  return withLearnedStateLock(() => smokeCandidateUnlocked(options));
+}
+
+function smokeCandidateUnlocked(options) {
   const state = loadState();
   const route = findRoute(state.routes, options.model || options.routeId);
   const { role, taskClass } = resolveRoleAndClass(route, options);
@@ -262,6 +320,10 @@ export function smokeCandidate(options = {}) {
 }
 
 export function cheapEvaluateCandidate(options = {}) {
+  return withLearnedStateLock(() => cheapEvaluateCandidateUnlocked(options));
+}
+
+function cheapEvaluateCandidateUnlocked(options) {
   const state = loadState();
   const route = findRoute(state.routes, options.model || options.routeId);
   const { role, taskClass } = resolveRoleAndClass(route, options);
@@ -283,6 +345,10 @@ export function cheapEvaluateCandidate(options = {}) {
 }
 
 export function enterChallenger(options = {}) {
+  return withLearnedStateLock(() => enterChallengerUnlocked(options));
+}
+
+function enterChallengerUnlocked(options) {
   const state = loadState();
   const route = findRoute(state.routes, options.model || options.routeId);
   const { role, taskClass } = resolveRoleAndClass(route, options);
@@ -308,6 +374,10 @@ export function enterChallenger(options = {}) {
 }
 
 export function recordRealTraffic(options = {}) {
+  return withLearnedStateLock(() => recordRealTrafficUnlocked(options));
+}
+
+function recordRealTrafficUnlocked(options) {
   const state = loadState();
   const route = findRoute(state.routes, options.model || options.routeId);
   const { role, taskClass } = resolveRoleAndClass(route, options);

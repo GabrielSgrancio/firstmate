@@ -320,7 +320,10 @@ const observedRouteEconomics = economics.buildRouteEconomics({
   poolEconomics: observedPoolEconomics,
   observations: observedTelemetry
 });
-assert.equal(observedRouteEconomics.burn_evidence, 'real_quota_delta');
+// One real delta is below the calibration sample floor, so the catalog burn stays authoritative.
+assert.equal(observedRouteEconomics.burn_evidence, 'insufficient_pool_calibration_samples');
+assert.equal(observedRouteEconomics.observed_quota_delta_percent, 5);
+assert.equal(observedRouteEconomics.expected_quota_burn_per_attempt, qwenRoute.expected_normalized_burn);
 assert.equal(observedRouteEconomics.actual_token_usage, 1200);
 assert.equal(
   observedRouteEconomics.expected_successful_quota_burn,
