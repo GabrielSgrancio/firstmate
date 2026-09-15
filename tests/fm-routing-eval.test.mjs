@@ -119,12 +119,29 @@ result = evaluator.enterChallenger({ model: 'omen-alpha', taskClass: 'targeted_e
 assert.equal(result.route.routing_status, 'CHALLENGER');
 assert.equal(result.policy.rate, 0.18);
 
-const refusedRisk = evaluator.recordRealTraffic({
+// An ordinary production outcome is telemetry: it is recorded with an AMBIGUOUS
+// attribution and never changes capability evidence, whatever its data class.
+const MODEL_EVIDENCE = { attribution: 'MODEL_BEHAVIOR', attributionEvidence: ['controlled_evaluation'] };
+const ambiguous = evaluator.recordRealTraffic({
   model: 'omen-alpha', taskClass: 'targeted_edit', dataClass: 'PERSONAL_SENSITIVE', retryTolerant: true,
   success: true
 });
-assert.equal(refusedRisk.promoted, false);
-assert.match(refusedRisk.refusal.reasons.join(','), /not eligible for automatic exploration/);
+assert.equal(ambiguous.promoted, false);
+assert.equal(ambiguous.capabilityMutated, false);
+assert.equal(ambiguous.event.attribution, 'AMBIGUOUS');
+assert.equal(ambiguous.event.stage, 'PRODUCTION_OUTCOME');
+for (const attribution of ['PROVIDER', 'TASK_SPEC', 'PROMPT', 'QUOTA']) {
+  const telemetry = evaluator.recordRealTraffic({
+    model: 'omen-alpha', taskClass: 'targeted_edit', dataClass: 'PUBLIC', tests_pass: false, task_completed: false, attribution
+  });
+  assert.equal(telemetry.capabilityMutated, false, `${attribution} must not modify capability`);
+  assert.equal(telemetry.stats.real_n, 0);
+}
+const unevidenced = evaluator.recordRealTraffic({
+  model: 'omen-alpha', taskClass: 'targeted_edit', dataClass: 'PUBLIC', tests_pass: false, task_completed: false, attribution: 'MODEL_BEHAVIOR'
+});
+assert.equal(unevidenced.capabilityMutated, false, 'MODEL_BEHAVIOR without attributable evidence stays telemetry');
+assert.match(unevidenced.attribution.reason, /requires one of/);
 
 const beforeLearned = JSON.parse(fs.readFileSync(learnedPath, 'utf8'));
 const prior = beforeLearned.route_capabilities?.['opencode:omen-alpha']?.capabilities?.targeted_edit;
@@ -134,7 +151,7 @@ assert.equal(prior.uncertainty.status, 'untested');
 for (let index = 0; index < 14; index += 1) {
   result = evaluator.recordRealTraffic({
     model: 'omen-alpha', taskClass: 'targeted_edit', dataClass: 'PUBLIC', retryTolerant: true,
-    success: true, tests_pass: true, task_completed: true
+    success: true, tests_pass: true, task_completed: true, ...MODEL_EVIDENCE
   });
 }
 assert.equal(result.route.routing_status, 'LOW_RISK_REAL_TRAFFIC');
@@ -146,11 +163,11 @@ assert.equal(result.promotionGate.real_successes, 14);
 assert.equal(result.promotionGate.minimum_success_rate, 0.8);
 assert.equal(result.promotionGate.deterministic_evidence_passed, true);
 assert.equal(result.promotionGate.passed, false);
-assert.equal(result.policy.rate, 0.18);
+assert.equal(result.promotionGate.affects_routing, false, 'the promotion gate is audit history, not eligibility');
 
 result = evaluator.recordRealTraffic({
   model: 'omen-alpha', taskClass: 'targeted_edit', dataClass: 'PUBLIC', retryTolerant: true,
-  success: true, tests_pass: true, task_completed: true
+  success: true, tests_pass: true, task_completed: true, ...MODEL_EVIDENCE
 });
 assert.equal(result.stats.real_n, 15);
 assert.equal(result.stats.real_successes, 15);
@@ -161,7 +178,6 @@ assert.equal(result.promotionGate.minimum_successful_outcomes, 12);
 assert.equal(result.promotionGate.success_rate, 1);
 assert.equal(result.promotionGate.deterministic_evidence_passed, true);
 assert.equal(result.promotionGate.passed, true);
-assert.equal(result.policy.rate, 0.05);
 
 const finalRoutes = JSON.parse(fs.readFileSync(routesPath, 'utf8'));
 assert.equal(finalRoutes.find((route) => route.route_id === 'opencode:omen-alpha').routing_status, 'BENCHMARK_ONLY');
@@ -177,7 +193,7 @@ assert.ok(finalRegistry.roles.fast_precise.challengers.includes('omen-alpha'));
 
 const events = fs.readFileSync(path.join(home, 'data/routing-evaluations.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
 assert.ok(events.some((event) => event.stage === 'SMOKE' && event.outcome === 'pass'));
-assert.ok(events.some((event) => event.outcome === 'refused' && event.refusal?.reasons));
+assert.ok(events.some((event) => event.stage === 'PRODUCTION_OUTCOME' && event.attribution === 'AMBIGUOUS' && event.capability_mutated === false));
 
 const deterministic = evaluator.TASK_CLASSES.brownfield_debugging;
 assert.deepEqual(deterministic.deterministic, ['bug_reproduced', 'regression_tests_added', 'tests_pass', 'task_completed']);
@@ -219,7 +235,8 @@ const conflictingSignals = evaluator.recordRealTraffic({
   retryTolerant: true,
   success: true,
   tests_pass: false,
-  task_completed: true
+  task_completed: true,
+  ...MODEL_EVIDENCE
 });
 assert.equal(conflictingSignals.stats.real_successes, 0);
 assert.equal(conflictingSignals.event.outcome, 'fail');
@@ -235,7 +252,8 @@ for (const [routeId, successfulAttempts] of [['opencode:omen-zero', 0], ['openco
       dataClass: 'PUBLIC',
       retryTolerant: true,
       tests_pass: passed,
-      task_completed: true
+      task_completed: true,
+      ...MODEL_EVIDENCE
     });
   }
   assert.equal(last.stats.real_n, 15);
@@ -253,7 +271,8 @@ for (let index = 0; index < 15; index += 1) {
     dataClass: 'PUBLIC',
     retryTolerant: true,
     tests_pass: true,
-    task_completed: true
+    task_completed: true,
+    ...MODEL_EVIDENCE
   });
 }
 assert.equal(result.route.routing_status, 'ROUTING_ELIGIBLE');

@@ -1,6 +1,9 @@
 // Shared Router V3 capability taxonomy, evidence schema, and exploration policy.
 // Router V2 reads this state; the evaluation lifecycle is the only writer.
 
+// Evaluation lifecycle stages and the promotion criteria below are audit history.
+// Router candidate generation does not read them as eligibility; see
+// docs/router-v3-model-intelligence-schema.md.
 export const STAGES = Object.freeze([
   'DISCOVERED',
   'SMOKE',

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { ROUTE_EXCUSED_ATTRIBUTIONS, normalizeAttribution } from './fm-model-intelligence.mjs';
 
 const WINDOW_HORIZONS_HOURS = {
   rolling: 5,
@@ -22,6 +23,10 @@ const POOL_SCARCITY_RANK = {
 export const MIN_BURN_CALIBRATION_SAMPLES = 3;
 export const BURN_PRIOR_WEIGHT = 3;
 export const BURN_RATIO_BOUND = 4;
+// Observed route failure rate is shrunk toward the Stage B failure expectation
+// with this many pseudo-attempts, so one completed task cannot swing retry cost.
+export const RETRY_PRIOR_WEIGHT = 3;
+const OPERATIONAL_HEALTH_SCORE = { HEALTHY: 1, DEGRADED: 0.5, UNHEALTHY: 0, UNKNOWN: null };
 
 export const RESOURCE_POOLS = [
   'claude_pro',
@@ -139,6 +144,7 @@ function routeIdForRecord(records) {
 function aggregateForRoute() {
   return {
     attempts: 0,
+    reliabilityAttempts: 0,
     successes: 0,
     failures: 0,
     retries: 0,
@@ -152,8 +158,9 @@ function aggregateForRoute() {
 
 function addObservation(target, observation) {
   target.attempts += 1;
+  if (!observation.excused) target.reliabilityAttempts += 1;
   if (observation.success) target.successes += 1;
-  if (observation.failure) target.failures += 1;
+  if (observation.failure && !observation.excused) target.failures += 1;
   if (observation.retry) target.retries += 1;
   if (finite(observation.tokens)) target.tokenValues.push(observation.tokens);
   if (finite(observation.latency)) target.latencyValues.push(observation.latency);
@@ -255,7 +262,11 @@ export function collectRoutingObservations(executions = [], routes = [], now = n
     const completedAt = eventTime(completed);
     const observation = {
       success: completed.terminal_state === 'SUCCESS',
-      failure: completed.terminal_state && completed.terminal_state !== 'SUCCESS',
+      failure: Boolean(completed.terminal_state && completed.terminal_state !== 'SUCCESS'),
+      // A failure its attribution explains is not the route's operational fault,
+      // so it leaves the route's retry reliability sample entirely.
+      excused: Boolean(completed.terminal_state && completed.terminal_state !== 'SUCCESS' &&
+        ROUTE_EXCUSED_ATTRIBUTIONS.includes(normalizeAttribution(completed.failure_attribution))),
       retry: Number(completed.retry_count ?? started.retry_count ?? 0) > 0,
       tokens: extractTokenUsage(completed) ?? extractTokenUsage(started),
       latency: startedAt !== null && completedAt !== null ? Math.max(0, (completedAt - startedAt) / 1000) : null,
@@ -520,6 +531,7 @@ export function buildRouteEconomics({
   candidateBasis = 'real_evidence',
   successProbability = null,
   effortFitScore = 0,
+  operationalHealth = null,
   now = new Date()
 } = {}) {
   const poolName = canonicalPoolName(route?.quota_pool, poolEconomics);
@@ -537,9 +549,12 @@ export function buildRouteEconomics({
   const expectedTokens = capability?.expected_token_usage ?? capability?.mean_tokens ?? route?.expected_token_usage ?? defaultTokenUsage(route);
   const latency = mean(routeObservation.latencyValues) ?? capability?.mean_latency_seconds ?? route?.latency_seconds ?? null;
   const cache = mean(routeObservation.cacheValues) ?? capability?.cache_efficiency ?? route?.cache_efficiency ?? null;
-  const retryProbability = routeObservation.attempts > 0
-    ? routeObservation.failures / routeObservation.attempts
-    : 1 - probability;
+  const retryProbability = (routeObservation.failures + RETRY_PRIOR_WEIGHT * (1 - probability)) /
+    (routeObservation.reliabilityAttempts + RETRY_PRIOR_WEIGHT);
+  const routeHealthScore = OPERATIONAL_HEALTH_SCORE[operationalHealth];
+  const routeHealth = finite(routeHealthScore)
+    ? Math.min(pool.route_health ?? 0.5, routeHealthScore)
+    : (pool.route_health ?? 0.5);
   const headroom = pool.actual_remaining;
   const surplus = pool.surplus;
   const pressure = pool.pressure;
@@ -570,7 +585,7 @@ export function buildRouteEconomics({
     0.20 * latencyScore +
     0.25 * concurrencyScore +
     0.30 * retryScore +
-    0.35 * (pool.route_health ?? 0.5) +
+    0.35 * routeHealth +
     0.25 * effortFitScore +
     explorationValue +
     controlledConsumption
@@ -615,7 +630,9 @@ export function buildRouteEconomics({
     cache_efficiency: cache,
     exploration_value: explorationValue,
     controlled_consumption_bonus: controlledConsumption,
-    route_health: pool.route_health ?? 0.5,
+    route_health: routeHealth,
+    operational_health: operationalHealth || 'UNKNOWN',
+    retry_observations: routeObservation.reliabilityAttempts,
     scarcity_state: pool.scarcity_state || 'UNKNOWN',
     quota_evidence: finite(headroom) ? 'observed' : 'unknown_low_confidence',
     economic_score: economicScore,

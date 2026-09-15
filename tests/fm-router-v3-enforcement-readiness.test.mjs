@@ -37,7 +37,8 @@ const WRITERS = 8;
 const writerSource = `
 const evaluator = await import(${JSON.stringify(path.join(ROOT, 'bin/fm-routing-eval.mjs'))});
 evaluator.recordRealTraffic({ routeId: ${JSON.stringify(routeId)}, taskClass: 'targeted_edit', dataClass: 'PUBLIC',
-  retryTolerant: true, success: true, tests_pass: true, task_completed: true });
+  retryTolerant: true, success: true, tests_pass: true, task_completed: true,
+  attribution: 'MODEL_BEHAVIOR', attributionEvidence: ['controlled_evaluation'] });
 `;
 const exits = await Promise.all(Array.from({ length: WRITERS }, () => new Promise((resolve) => {
   const child = spawn(process.execPath, ['--input-type=module', '-e', writerSource], {

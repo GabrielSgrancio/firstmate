@@ -28,7 +28,15 @@ const route = (overrides = {}) => router.scoreAndSelectRoute({
 });
 
 writePriors({});
-assert.throws(() => route(), /No viable RouteTargets/, 'no evidence and no prior still refuses');
+// No evidence is uncertainty, not invisibility: every route is a candidate, and
+// the task's quality floor refuses an ordinary task while a retry-tolerant one
+// may use an unknown route through the low-risk uncertainty tolerance.
+assert.throws(() => route(), /No routes meet quality floor/, 'no evidence and no prior still refuses an ordinary task');
+const tolerant = route({ retryTolerant: true });
+assert.equal(tolerant.topCandidates[0].admitted_by, 'low_risk_uncertainty_tolerance');
+assert.equal(tolerant.topCandidates[0].quality, 0.5);
+assert.throws(() => route({ retryTolerant: true, taskClass: 'brownfield_debugging', role: 'deep_engineer' }), /No routes meet quality floor/,
+  'high-risk task classes get no uncertainty tolerance');
 
 writePriors({
   'gpt-5.6-terra': { harness: 'opencode', prior_mean: 0.93, prior_effective_n: 40, recommended_roles: ['general_engineer'] }

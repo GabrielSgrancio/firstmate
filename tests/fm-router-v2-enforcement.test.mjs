@@ -95,10 +95,13 @@ const taskScopedCandidates = queryCapabilityCandidates({
   learned: capabilityState.learned,
   compiledRoutes: capabilityState.compiledRoutes
 });
-assert.ok(!taskScopedCandidates.candidates.some(({ route }) => route.route_id === 'codex:gpt-5.6-luna:low'),
-  'targeted-edit evidence must not grant test-generation eligibility to the same route');
-assert.ok(taskScopedCandidates.rejected.some(({ route_id, reason }) =>
-  route_id === 'codex:gpt-5.6-luna:low' && reason.includes('test_generation')));
+// Every unblocked route is a candidate, but targeted-edit evidence is not borrowed
+// as test-generation evidence: the route enters with no capability record.
+const lunaTestGeneration = taskScopedCandidates.candidates.find(({ route }) => route.route_id === 'codex:gpt-5.6-luna:low');
+assert.ok(lunaTestGeneration, 'a baseline subscription route is a candidate without task-class evidence');
+assert.equal(lunaTestGeneration.capability, null,
+  'targeted-edit evidence must not grant test-generation evidence to the same route');
+assert.notEqual(lunaTestGeneration.candidateBasis, 'real_evidence');
 
 assert.equal(evaluateDataGate('SECRET', 'claude_consumer').allowed, false);
 assert.throws(() => evaluateDataGate('WORK_CORPORATE', 'claude_consumer'), /Unknown data class: WORK_CORPORATE/);

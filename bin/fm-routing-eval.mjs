@@ -2,7 +2,15 @@
 // Usage: fm-routing-eval.mjs <status|smoke|cheap-eval|challenger|real-traffic|live> [options]
 //
 // Runs the local model-evaluation lifecycle.  The evaluator owns lifecycle
-// evidence and promotion writes; Router V2 remains the live routing authority.
+// evidence and audit-only promotion writes; Router V2 remains the live routing
+// authority and does not read lifecycle stages or real_n as eligibility.
+//
+// real-traffic records one production outcome.  --attribution <PROVIDER|HARNESS|
+// TOOLING|CONTEXT|QUOTA|INFRASTRUCTURE|POLICY|EVALUATOR|TASK_SPEC|PROMPT|
+// MODEL_BEHAVIOR|AMBIGUOUS> defaults to AMBIGUOUS; only MODEL_BEHAVIOR with
+// --attribution-evidence <kind[,kind]> (see MODEL_BEHAVIOR_EVIDENCE in
+// bin/fm-model-intelligence.mjs) changes capability evidence.  HARNESS with
+// --capability <name> marks that route capability WARNING in route validation.
 
 import fs from 'node:fs';
 import os from 'node:os';
@@ -24,6 +32,14 @@ import {
   updateCapabilityPosterior,
   rebuildModelFamilyPriors
 } from './fm-routing-capability.mjs';
+import {
+  ROUTE_VALIDATION_RELATIVE_PATH,
+  CAPABILITY_ANOMALIES_RELATIVE_PATH,
+  capabilityMutationAllowed,
+  detectCapabilityAnomaly,
+  loadModelIntelligence,
+  resolveTaskFit
+} from './fm-model-intelligence.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const FM_HOME = path.resolve(process.env.FM_HOME || ROOT);
@@ -34,6 +50,8 @@ const EVIDENCE_PATH = homePath('data/routing-evaluations.jsonl');
 const BENCHMARK_PATH = homePath('data/routing-benchmark.json');
 const REGISTRY_PATH = homePath('config/model-registry.json');
 const POLICY_PATH = homePath('config/routing-policy.json');
+const ROUTE_VALIDATION_PATH = homePath(ROUTE_VALIDATION_RELATIVE_PATH);
+const ANOMALIES_PATH = homePath(CAPABILITY_ANOMALIES_RELATIVE_PATH);
 
 export const TASK_CLASSES = ROUTING_TASK_CLASSES;
 export const STAGES = ROUTING_STAGES;
@@ -373,8 +391,70 @@ function enterChallengerUnlocked(options) {
   return { route: current, event, policy };
 }
 
+// Production outcomes are telemetry first.  Every outcome is recorded with a
+// failure attribution (AMBIGUOUS when none is given), and only MODEL_BEHAVIOR
+// backed by attributable evidence may change the route's capability record.
+// HARNESS outcomes naming a route capability mark that capability WARNING in
+// route validation; other attributions feed operational stores, not capability.
+// Lifecycle stages and the promotion gate are recorded for audit only; Router V3
+// candidate generation ignores both.
 export function recordRealTraffic(options = {}) {
   return withLearnedStateLock(() => recordRealTrafficUnlocked(options));
+}
+
+function attributionEvidenceList(value) {
+  if (Array.isArray(value)) return value;
+  if (typeof value === 'string') return value.split(',').map((item) => item.trim()).filter(Boolean);
+  return [];
+}
+
+function markRouteValidationWarning(route, capability, details) {
+  return withLearnedStateLock(() => {
+    const validation = fs.existsSync(ROUTE_VALIDATION_PATH)
+      ? readJson(ROUTE_VALIDATION_PATH, 'route validation')
+      : { schema_version: 1, routes: {} };
+    validation.routes = validation.routes || {};
+    const record = validation.routes[route.route_id] || { capabilities: {} };
+    record.capabilities = record.capabilities || {};
+    const current = record.capabilities[capability]?.status || 'UNKNOWN';
+    // Production evidence can raise a warning, never a FAILED verdict; FAILED is a
+    // hard incompatibility that needs controlled validation.
+    if (current === 'FAILED') return current;
+    record.capabilities[capability] = {
+      ...(record.capabilities[capability] || {}),
+      status: 'WARNING',
+      previous_status: current,
+      method: 'production_harness_attribution',
+      recorded_at: new Date().toISOString(),
+      evidence: details
+    };
+    validation.routes[route.route_id] = record;
+    writeJsonAtomic(ROUTE_VALIDATION_PATH, validation);
+    return 'WARNING';
+  }, `${ROUTE_VALIDATION_PATH}.lock`);
+}
+
+function recordCapabilityAnomaly(route, taskClass) {
+  const intelligence = loadModelIntelligence({ home: FM_HOME });
+  if (!intelligence.present) return null;
+  const taskFit = resolveTaskFit(intelligence, route, taskClass);
+  const outcomes = fs.existsSync(EVIDENCE_PATH)
+    ? fs.readFileSync(EVIDENCE_PATH, 'utf8').split('\n').flatMap((line) => {
+      try { return line.trim() ? [JSON.parse(line)] : []; } catch { return []; }
+    }).filter((event) => event.stage === 'PRODUCTION_OUTCOME')
+    : [];
+  const anomaly = detectCapabilityAnomaly({ outcomes, route, taskClass, taskFit });
+  if (!anomaly) return null;
+  const existing = fs.existsSync(ANOMALIES_PATH)
+    ? fs.readFileSync(ANOMALIES_PATH, 'utf8').split('\n').filter(Boolean).map((line) => {
+      try { return JSON.parse(line); } catch { return null; }
+    }).filter(Boolean)
+    : [];
+  const key = anomaly.failure_evaluation_ids.join(',');
+  if (existing.some((entry) => entry.route_id === anomaly.route_id && entry.task_class === taskClass &&
+      entry.failure_evaluation_ids?.join(',') === key)) return null;
+  appendJsonLine(ANOMALIES_PATH, anomaly);
+  return anomaly;
 }
 
 function recordRealTrafficUnlocked(options) {
@@ -382,15 +462,6 @@ function recordRealTrafficUnlocked(options) {
   const route = findRoute(state.routes, options.model || options.routeId);
   const { role, taskClass } = resolveRoleAndClass(route, options);
   const signals = normalizeSignals(options);
-  const risk = lowRiskReason({ ...options, route });
-  if (!risk.lowRisk) {
-    const event = recordEvidence(state, route, { stage: 'LOW_RISK_REAL_TRAFFIC', role, taskClass, signals, outcome: 'refused', details: { refusal: risk } });
-    return { route, event, promoted: false, refusal: risk };
-  }
-  const capability = ensureCapabilityRecord(state.learned, route, taskClass, role);
-  if (!['CHALLENGER', 'LOW_RISK_REAL_TRAFFIC'].includes(stageForStatus(capability.routing_status))) {
-    throw new Error(`Real traffic requires CHALLENGER, got ${stageForStatus(capability.routing_status)}`);
-  }
   const criteria = promotionCriteria(state.policy);
   const definition = TASK_CLASSES[taskClass];
   const evidence = deterministicEvidence(taskClass, signals);
@@ -398,64 +469,84 @@ function recordRealTrafficUnlocked(options) {
   const success = hasDeterministicContract
     ? evidence.method === 'deterministic' && evidence.passed
     : options.success === true || signals.task_completed === true;
-  const stats = capability;
-  stats.real_n += 1;
-  if (success) stats.real_successes += 1;
-  if (hasDeterministicContract) {
-    if (evidence.method === 'deterministic') stats.deterministic_evaluations += 1;
-    if (evidence.method !== 'deterministic' || !evidence.passed) stats.deterministic_failures += 1;
-  }
-  updateCapabilityPosterior(stats, criteria);
-  writeJsonAtomic(LEARNED_PATH, state.learned);
-  const current = stageForStatus(capability.routing_status) === 'CHALLENGER'
-    ? persistTransition(state, route, taskClass, role, 'LOW_RISK_REAL_TRAFFIC', {})
-    : routeWithCapability(route, capability);
+  const attribution = capabilityMutationAllowed({
+    attribution: options.attribution,
+    evidence: attributionEvidenceList(options.attribution_evidence ?? options.attributionEvidence)
+  });
+  const capability = ensureCapabilityRecord(state.learned, route, taskClass, role);
+  let finalRoute = routeWithCapability(route, capability);
   let promoted = false;
-  let finalRoute = current;
-  const successRate = stats.real_n === 0 ? 0 : stats.real_successes / stats.real_n;
-  const deterministicEvidencePassed = !hasDeterministicContract || (
-    stats.deterministic_evaluations === stats.real_n && stats.deterministic_failures === 0
-  );
-  const promotionGate = {
-    required_real_n: criteria.minRealN,
-    real_n: stats.real_n,
-    minimum_successful_outcomes: criteria.minSuccessfulOutcomes,
-    real_successes: stats.real_successes,
-    success_rate: successRate,
-    minimum_success_rate: criteria.minSuccessRate,
-    deterministic_evidence_required: hasDeterministicContract,
-    deterministic_evidence_passed: deterministicEvidencePassed,
-    passed: stats.real_n >= criteria.minRealN &&
-      stats.real_successes >= criteria.minSuccessfulOutcomes &&
-      successRate >= criteria.minSuccessRate &&
-      deterministicEvidencePassed
-  };
-  if (promotionGate.passed) {
-    finalRoute = persistTransition(state, route, taskClass, role, 'ROUTING_ELIGIBLE', {});
-    promoteRegistryVisibility(finalRoute, role);
-    promoted = true;
+  let promotionGate = null;
+  let routeValidationEffect = null;
+  if (attribution.allowed) {
+    const stats = capability;
+    stats.real_n += 1;
+    if (success) stats.real_successes += 1;
+    if (hasDeterministicContract) {
+      if (evidence.method === 'deterministic') stats.deterministic_evaluations += 1;
+      if (evidence.method !== 'deterministic' || !evidence.passed) stats.deterministic_failures += 1;
+    }
+    updateCapabilityPosterior(stats, criteria);
+    writeJsonAtomic(LEARNED_PATH, state.learned);
+    if (stageForStatus(capability.routing_status) === 'CHALLENGER') {
+      finalRoute = persistTransition(state, route, taskClass, role, 'LOW_RISK_REAL_TRAFFIC', {});
+    }
+    const successRate = stats.real_n === 0 ? 0 : stats.real_successes / stats.real_n;
+    const deterministicEvidencePassed = !hasDeterministicContract || (
+      stats.deterministic_evaluations === stats.real_n && stats.deterministic_failures === 0
+    );
+    promotionGate = {
+      affects_routing: false,
+      required_real_n: criteria.minRealN,
+      real_n: stats.real_n,
+      minimum_successful_outcomes: criteria.minSuccessfulOutcomes,
+      real_successes: stats.real_successes,
+      success_rate: successRate,
+      minimum_success_rate: criteria.minSuccessRate,
+      deterministic_evidence_required: hasDeterministicContract,
+      deterministic_evidence_passed: deterministicEvidencePassed,
+      passed: stats.real_n >= criteria.minRealN &&
+        stats.real_successes >= criteria.minSuccessfulOutcomes &&
+        successRate >= criteria.minSuccessRate &&
+        deterministicEvidencePassed
+    };
+    if (promotionGate.passed && stageForStatus(capability.routing_status) === 'LOW_RISK_REAL_TRAFFIC') {
+      finalRoute = persistTransition(state, route, taskClass, role, 'ROUTING_ELIGIBLE', {});
+      promoteRegistryVisibility(finalRoute, role);
+      promoted = true;
+    }
+    rebuildModelFamilyPriors(state.learned, state.routes);
+    writeJsonAtomic(LEARNED_PATH, state.learned);
+  } else if (attribution.attribution === 'HARNESS' && typeof options.capability === 'string' && options.capability) {
+    routeValidationEffect = { capability: options.capability, status: markRouteValidationWarning(route, options.capability, options.note || null) };
   }
-  rebuildModelFamilyPriors(state.learned, state.routes);
-  writeJsonAtomic(LEARNED_PATH, state.learned);
   const event = recordEvidence(state, finalRoute, {
-    stage: 'LOW_RISK_REAL_TRAFFIC', role, taskClass, signals,
+    stage: 'PRODUCTION_OUTCOME', role, taskClass, signals,
     outcome: success ? 'pass' : 'fail',
     details: {
-      real_n: stats.real_n,
-      real_successes: stats.real_successes,
+      attribution: attribution.attribution,
+      attribution_effect: attribution.effect,
+      attribution_reason: attribution.reason,
+      capability_mutated: attribution.allowed,
+      route_validation_effect: routeValidationEffect,
+      real_n: capability.real_n,
+      real_successes: capability.real_successes,
       promoted,
       promotion_gate: promotionGate,
-      promotion_criteria: criteria,
       deterministic_evidence: evidence
     }
   });
+  const anomaly = recordCapabilityAnomaly(route, taskClass);
   return {
     route: finalRoute,
     event,
-    stats,
+    stats: capability,
+    attribution,
+    capabilityMutated: attribution.allowed,
+    routeValidationEffect,
+    anomaly,
     promoted,
-    promotionGate,
-    policy: explorationPolicy({ stage: finalRoute.routing_status, realN: stats.real_n, route: finalRoute, ...options })
+    promotionGate
   };
 }
 

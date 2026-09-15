@@ -1,0 +1,105 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-09-15T00:00:00Z",
+  "fixture": "synthetic-model-intelligence",
+  "notes": "Synthetic test fixture. Model names, classes, and sources are invented and describe no real model.",
+  "models": {
+    "synthetic-frontier-coder": {
+      "model_version": "synthetic-2026-09",
+      "aliases": ["opencode-go/synthetic-frontier-coder-legacy-alias"],
+      "capabilities": {
+        "refactor": {
+          "class": "FRONTIER",
+          "confidence": "HIGH",
+          "provenance": [{
+            "source": "https://example.invalid/synthetic-frontier-coder/model-card",
+            "source_type": "first_party_model_card",
+            "retrieved_at": "2026-09-15T00:00:00Z",
+            "model_version": "synthetic-2026-09",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "HIGH",
+            "notes": "synthetic fixture",
+            "effective_from": "2026-09-01T00:00:00Z",
+            "valid_until": null
+          }]
+        },
+        "targeted_edit": {
+          "class": "STRONG",
+          "confidence": "HIGH",
+          "provenance": [{
+            "source": "https://example.invalid/synthetic-benchmark",
+            "source_type": "benchmark_project",
+            "retrieved_at": "2026-09-15T00:00:00Z",
+            "model_version": "synthetic-2026-09",
+            "benchmark": "Synthetic-Edit-Bench",
+            "benchmark_harness": "synthetic-harness",
+            "confidence": "HIGH",
+            "notes": "synthetic fixture",
+            "effective_from": "2026-09-01T00:00:00Z",
+            "valid_until": null
+          }]
+        },
+        "critical_review": {
+          "class": "FRONTIER",
+          "confidence": "HIGH",
+          "provenance": [{
+            "source": "https://example.invalid/synthetic-frontier-coder/model-card",
+            "source_type": "first_party_model_card",
+            "retrieved_at": "2026-09-15T00:00:00Z",
+            "model_version": "synthetic-2026-09",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "HIGH",
+            "notes": "synthetic fixture",
+            "effective_from": "2026-09-01T00:00:00Z",
+            "valid_until": null
+          }]
+        }
+      }
+    },
+    "synthetic-weak-coder": {
+      "model_version": "synthetic-2026-09",
+      "capabilities": {
+        "refactor": {
+          "class": "WEAK",
+          "confidence": "HIGH",
+          "provenance": [{
+            "source": "https://example.invalid/synthetic-weak-coder/model-card",
+            "source_type": "first_party_model_card",
+            "retrieved_at": "2026-09-15T00:00:00Z",
+            "model_version": "synthetic-2026-09",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "HIGH",
+            "notes": "synthetic fixture",
+            "effective_from": "2026-09-01T00:00:00Z",
+            "valid_until": null
+          }]
+        }
+      }
+    },
+    "synthetic-unsourced-coder": {
+      "model_version": "synthetic-2026-09",
+      "capabilities": {
+        "refactor": { "class": "FRONTIER", "confidence": "HIGH", "provenance": [{ "source": "https://example.invalid/claim", "notes": "missing required provenance fields" }] },
+        "targeted_edit": {
+          "class": "FRONTIER",
+          "confidence": "HIGH",
+          "provenance": [{
+            "source": "https://example.invalid/expired",
+            "source_type": "community",
+            "retrieved_at": "2026-01-01T00:00:00Z",
+            "model_version": "synthetic-2026-01",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "LOW",
+            "notes": "expired synthetic claim",
+            "effective_from": "2026-01-01T00:00:00Z",
+            "valid_until": "2026-02-01T00:00:00Z"
+          }]
+        }
+      }
+    }
+  }
+}

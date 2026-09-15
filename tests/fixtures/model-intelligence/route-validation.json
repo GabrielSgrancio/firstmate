@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "fixture": "synthetic-model-intelligence",
+  "routes": {
+    "opencode:synthetic-frontier-coder": {
+      "operational_health": "HEALTHY",
+      "capabilities": {
+        "text_generation": { "status": "VALIDATED", "method": "controlled_eval", "validated_at": "2026-09-15T00:00:00Z" },
+        "tool_use": { "status": "VALIDATED", "method": "controlled_eval", "validated_at": "2026-09-15T00:00:00Z" },
+        "file_edit": { "status": "VALIDATED", "method": "controlled_eval", "validated_at": "2026-09-15T00:00:00Z" },
+        "long_context": { "status": "UNKNOWN" }
+      }
+    },
+    "opencode:synthetic-broken-tools": {
+      "capabilities": {
+        "tool_use": { "status": "FAILED", "method": "controlled_eval", "validated_at": "2026-09-15T00:00:00Z" },
+        "text_generation": { "status": "VALIDATED", "method": "controlled_eval", "validated_at": "2026-09-15T00:00:00Z" }
+      }
+    },
+    "opencode:synthetic-unhealthy": {
+      "operational_health": "UNHEALTHY",
+      "capabilities": {}
+    }
+  }
+}

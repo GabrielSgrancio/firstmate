@@ -397,6 +397,10 @@
       "audience": "maintainer-architecture"
     },
     {
+      "path": "docs/router-v3-model-intelligence-schema.md",
+      "audience": "maintainer-architecture"
+    },
+    {
       "path": "docs/ORCHESTRATOR_API_CANONICAL_REPORT.md",
       "audience": "maintainer-architecture"
     },

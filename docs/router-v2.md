@@ -6,6 +6,8 @@ The Router reads configuration and generated state from `FM_HOME` only.
 
 The required static inputs are `config/model-registry.json`, `config/routing-policy.json`, `config/routing-priors.json`, and `config/data-policy.json`.
 
+The optional knowledge inputs are `data/model-intelligence/model-intelligence.json` and `data/model-intelligence/route-validation.json`.
+
 Provider catalogs, compiled RouteTargets, quota maps, learned routing, and telemetry are generated runtime state and are not source fixtures.
 
 Run `FM_HOME=<home> node bin/fm-provider-discovery.mjs refresh` to refresh provider catalogs and compile RouteTargets from the provider-owned caches and live discovery commands.
@@ -77,10 +79,10 @@ A provider refresh that falls back to a snapshot older than 24 hours publishes t
 Provenance binds the recorded data class and effort as well as the task, execution, route, harness, and model, and refuses `SECRET` even with a matching record.
 The spend gate admits only a catalogued route in one of the five subscription pools that is not credit-gated; an uncatalogued model, a model catalogued in any other pool, a harness with no subscription route, and a custom command are refused.
 
-A task without qualifying real capability evidence normally needs retry-tolerant exploration.
-`seedPriorAdmission` also admits a non-critical task onto a catalog `ROUTING_ELIGIBLE` route whose `config/routing-priors.json` entry names the route's harness (a prior without a `harness` is not admitted) and lists the requested role in `recommended_roles`.
-Stage B still applies the task-class quality floor to that prior, Stage C records `candidate_basis: seed_prior`, and a task marked critical still requires real evidence.
-`tests/fm-router-v3-single-authority.test.mjs` pins these guarantees, and `tests/fm-router-ingress.test.mjs` exercises enforcement through real `fm-spawn.sh` launches.
+Candidate generation admits every RouteTarget that no hard blocker excludes; lifecycle `routing_status`, `real_n`, and promotion criteria are audit history, not eligibility.
+[`docs/router-v3-model-intelligence-schema.md`](router-v3-model-intelligence-schema.md) owns the route state dimensions, hard blockers, Model Intelligence and route validation schemas, Stage B quality rules, and failure attribution.
+Without a Model Intelligence file, a `config/routing-priors.json` entry counts as seed-prior quality evidence only when it names the route's harness (a prior without a `harness` is not admitted) and lists the requested role in `recommended_roles`, and a task marked critical still requires real evidence.
+`tests/fm-router-v3-single-authority.test.mjs` and `tests/fm-model-intelligence.test.mjs` pin these guarantees, and `tests/fm-router-ingress.test.mjs` exercises enforcement through real `fm-spawn.sh` launches.
 
 The deterministic Router suites use the clearly synthetic fixtures under `tests/fixtures/router-v2` and do not access live credentials or private catalogs.
 

@@ -8,7 +8,6 @@ import {
   TASK_CLASSES,
   taskClassForRole,
   explorationPolicy,
-  capabilityEvidenceQualifies,
   getCapabilityRecord,
   normalizeLearnedRouting,
   promotionCriteria,
@@ -24,6 +23,14 @@ import {
   collectRoutingObservations,
   selectEconomicRoute
 } from './fm-routing-economics.mjs';
+import {
+  CLASS_QUALITY_PRIOR,
+  loadModelIntelligence,
+  loadRouteValidation,
+  resolveTaskFit,
+  routeValidationSummary,
+  normalizeAttribution
+} from './fm-model-intelligence.mjs';
 import { createContextBroker } from './fm-context-broker.mjs';
 import {
   FAILURE_CLASSIFICATIONS,
@@ -197,7 +204,11 @@ export function loadConfigs() {
   const learned = fs.existsSync(learnedRoutingPath)
     ? normalizeLearnedRouting(readJson(learnedRoutingPath, 'learned routing'), compiledRoutes)
     : normalizeLearnedRouting(null, compiledRoutes);
-  return { registry, policy, priors, dataPolicy, privacyMetadata, quotaMap, learned, compiledRoutes };
+  // Model Intelligence and route validation live beside, never inside, provider
+  // catalogs, so a discovery refresh cannot rewrite what is known about a route.
+  const modelIntelligence = loadModelIntelligence({ home: currentFmHome() });
+  const routeValidation = loadRouteValidation({ home: currentFmHome() });
+  return { registry, policy, priors, dataPolicy, privacyMetadata, quotaMap, learned, compiledRoutes, modelIntelligence, routeValidation };
 }
 
 export function validateConfigs() {
@@ -326,16 +337,12 @@ export const ROLE_DEFAULT_EFFORT = {
   cheap_tool_worker: 'low'
 };
 
-// Bootstrap path for an evidence-thin home: a non-critical task that is not
-// retry-tolerant may still use a catalog ROUTING_ELIGIBLE route whose curated seed
-// prior (config/routing-priors.json) names this role and this harness.  Stage B
-// still applies the task-class quality floor to that prior, and real outcomes
-// replace it as the evaluation lifecycle records them.
+// Seed priors from config/routing-priors.json are legacy quality evidence, used
+// only where no Model Intelligence file is present.  A prior counts for a route
+// when it names the route's harness and recommends the requested role; a task
+// marked critical never rests on a seed prior.  Catalog routing_status plays no part.
 export function seedPriorAdmission({ route, role, critical = false, priors = null } = {}) {
   if (critical) return { admitted: false, reason: 'critical tasks require real capability evidence' };
-  if (route?.routing_status !== 'ROUTING_ELIGIBLE') {
-    return { admitted: false, reason: `catalog status ${route?.routing_status || 'unknown'} is not ROUTING_ELIGIBLE` };
-  }
   const prior = priorForRoute(route, priors);
   if (!prior) return { admitted: false, reason: 'no seed prior for this route' };
   if (!prior.harness) return { admitted: false, reason: 'seed prior does not name a harness' };
@@ -345,9 +352,57 @@ export function seedPriorAdmission({ route, role, critical = false, priors = nul
   if (!Array.isArray(prior.recommended_roles) || !prior.recommended_roles.includes(role)) {
     return { admitted: false, reason: `seed prior does not recommend role ${role}` };
   }
-  return { admitted: true, reason: 'seed prior recommends this role' };
+  return { admitted: true, reason: 'seed prior recommends this role', prior };
 }
 
+const AVAILABILITY_STATE = Object.freeze({
+  available: 'AVAILABLE',
+  // The catalog could not confirm availability; Stage A's live pool status still gates.
+  unknown: 'AVAILABLE',
+  credit_gated: 'AVAILABLE',
+  stale_catalog: 'STALE',
+  stale: 'STALE',
+  auth_required: 'AUTH_REQUIRED'
+});
+const SPEND_POLICIES = new Set(['BASELINE_SUBSCRIPTION', 'CREDIT_GATED', 'PAYG', 'FORBIDDEN']);
+
+// Independent RouteTarget state dimensions.  None of them reads lifecycle
+// routing_status stages or real_n; only hard facts can produce a hard blocker.
+// Validation and operational health come from route-validation.json and default
+// to UNKNOWN, which is uncertainty and never a block.
+export function routeStateDimensions(route, { routeValidation = null, taskClass = null } = {}) {
+  const broken = route?.broken === true || route?.routing_status === 'BROKEN';
+  const availability = broken ? 'UNAVAILABLE'
+    : (route?.availability === undefined ? 'AVAILABLE' : (AVAILABILITY_STATE[route.availability] || 'UNAVAILABLE'));
+  let spendPolicy;
+  if (SPEND_POLICIES.has(route?.spend_policy)) spendPolicy = route.spend_policy;
+  else if (route?.availability === 'credit_gated' || route?.routing_status === 'CREDIT_GATED' || /_credits$/.test(route?.quota_pool || '')) spendPolicy = 'CREDIT_GATED';
+  else if (RESOURCE_POOLS.includes(routePoolName(route))) spendPolicy = 'BASELINE_SUBSCRIPTION';
+  else spendPolicy = 'FORBIDDEN';
+  const summary = taskClass ? routeValidationSummary(routeValidation, route, taskClass) : { validation: 'UNKNOWN', capabilities: {}, operational_health: 'UNKNOWN' };
+  const hardBlockers = [];
+  if (availability !== 'AVAILABLE') hardBlockers.push(`availability ${availability}${route?.availability ? ` (${route.availability})` : ''}`);
+  if (spendPolicy !== 'BASELINE_SUBSCRIPTION') hardBlockers.push(`spend policy ${spendPolicy}`);
+  if (route?.routing_status === 'MANUAL_ONLY') hardBlockers.push('captain policy MANUAL_ONLY');
+  if (summary.validation === 'FAILED') {
+    const failed = Object.entries(summary.capabilities).filter(([, status]) => status === 'FAILED').map(([name]) => name);
+    hardBlockers.push(`route validation FAILED for ${failed.join(', ')}`);
+  }
+  if (summary.operational_health === 'UNHEALTHY') hardBlockers.push('operational health UNHEALTHY');
+  return {
+    availability,
+    spend_policy: spendPolicy,
+    validation: summary.validation,
+    validation_capabilities: summary.capabilities,
+    operational_health: summary.operational_health,
+    hard_blockers: hardBlockers
+  };
+}
+
+// Candidate generation admits every RouteTarget that no hard blocker excludes.
+// Missing local evidence, a small real_n, or a lifecycle stage short of
+// ROUTING_ELIGIBLE is uncertainty that Stage B weighs against the task class;
+// it is never invisibility.
 export function queryCapabilityCandidates({
   role,
   taskClass = null,
@@ -357,33 +412,38 @@ export function queryCapabilityCandidates({
   policy = {},
   learned = null,
   priors = null,
-  compiledRoutes = []
+  compiledRoutes = [],
+  modelIntelligence = null,
+  routeValidation = null,
+  now = new Date()
 } = {}) {
   const selectedTaskClass = taskClass || taskClassForRole(role);
   if (!TASK_CLASSES[selectedTaskClass]) {
     throw new Error(`Cannot route unknown task class: "${selectedTaskClass}"`);
   }
+  // Retained for audit output only; promotion criteria no longer gate candidates.
   const criteria = promotionCriteria(policy);
+  const intelligenceMode = modelIntelligence?.present === true;
   const candidates = [];
   const rejected = [];
   for (const route of compiledRoutes) {
-    if (route.routing_status === 'BROKEN' || route.routing_status === 'MANUAL_ONLY' ||
-        route.routing_status === 'CREDIT_GATED' || route.availability === 'credit_gated') {
-      rejected.push({ route_id: route.route_id, reason: `Route catalog blocked status "${route.routing_status}"` });
+    const routeState = routeStateDimensions(route, { routeValidation, taskClass: selectedTaskClass });
+    if (routeState.hard_blockers.length) {
+      rejected.push({ route_id: route.route_id, reason: `Hard blocker: ${routeState.hard_blockers.join('; ')}`, route_state: routeState });
       continue;
     }
     const capability = getCapabilityRecord(learned, route, selectedTaskClass);
     const capabilityStatus = capability?.routing_status || 'BENCHMARK_ONLY';
-    const realEvidence = capabilityEvidenceQualifies(capability, criteria, selectedTaskClass);
-    const explorationStage = capabilityStatus === 'ROUTING_ELIGIBLE' ? 'ROUTING_ELIGIBLE' : 'CHALLENGER';
-    const exploration = realEvidence ? {
+    const taskFit = intelligenceMode ? resolveTaskFit(modelIntelligence, route, selectedTaskClass, now) : null;
+    const realEvidence = Number.isFinite(capability?.real_n) && capability.real_n > 0;
+    const exploration = realEvidence || taskFit?.usable ? {
       rate: 0,
       eligible: false,
-      phase: 'real-evidence',
-      lowRisk: true,
+      phase: taskFit?.usable ? 'model-intelligence' : 'real-evidence',
+      lowRisk: !critical && retryTolerant,
       reasons: []
     } : explorationPolicy({
-      stage: explorationStage,
+      stage: 'CHALLENGER',
       realN: capability?.real_n || 0,
       dataClass,
       critical,
@@ -392,26 +452,15 @@ export function queryCapabilityCandidates({
       resolvedRuntimeModel: route.resolved_runtime_model,
       evaluateDataGate
     });
-    const seedPrior = !realEvidence && !exploration.eligible
-      ? seedPriorAdmission({ route, role, critical, priors })
-      : null;
-    if (!realEvidence && !exploration.eligible && !seedPrior.admitted) {
-      rejected.push({
-        route_id: route.route_id,
-        reason: `Capability evidence unavailable for ${selectedTaskClass}; exploration blocked: ${exploration.reasons.join('; ') || exploration.phase}; seed prior not admitted: ${seedPrior.reason}`
-      });
-      continue;
-    }
-    candidates.push({
-      route,
-      capability,
-      capabilityStatus,
-      realEvidence,
-      exploration,
-      candidateBasis: realEvidence ? 'real_evidence' : (exploration.eligible ? 'exploration' : 'seed_prior')
-    });
+    let candidateBasis;
+    if (intelligenceMode) candidateBasis = taskFit.usable ? 'model_intelligence' : 'exploration';
+    else if (realEvidence) candidateBasis = 'real_evidence';
+    else if (Number.isFinite(capability?.posterior_mean) && capability.prior_effective_n > 0) candidateBasis = 'capability_prior';
+    else if (seedPriorAdmission({ route, role, critical, priors }).admitted) candidateBasis = 'seed_prior';
+    else candidateBasis = 'exploration';
+    candidates.push({ route, capability, capabilityStatus, routeState, taskFit, realEvidence, exploration, candidateBasis });
   }
-  return { taskClass: selectedTaskClass, criteria, candidates, rejected };
+  return { taskClass: selectedTaskClass, criteria, intelligenceMode, candidates, rejected };
 }
 
 export function resolveLiveQuotaPools({ quotaOverrides = null, useLiveAxi = true } = {}) {
@@ -639,7 +688,40 @@ function priorForRoute(route, priors) {
   return null;
 }
 
-function qualityEvidence(candidate, selectedTaskClass, learned, priors) {
+// Semantic quality evidence for Stage B.  When a Model Intelligence file is
+// present it is the only semantic source: a usable assertion supplies its class
+// anchor and confidence width, and a model it does not cover is UNKNOWN.  Real
+// production outcomes never move that judgment; they stay operational telemetry.
+// Without a Model Intelligence file the legacy chain (capability record, family
+// prior, seed prior) still applies so homes keep routing until it is populated.
+function qualityEvidence(candidate, selectedTaskClass, learned, priors, { intelligenceMode = false, role = null, critical = false } = {}) {
+  const fit = candidate.taskFit;
+  if (fit?.usable) {
+    return {
+      quality: fit.quality_prior,
+      source: 'model_intelligence',
+      capability_class: fit.class,
+      confidence: fit.confidence,
+      model_key: fit.model_key,
+      dimension: fit.dimension,
+      real_n: 0,
+      real_successes: 0,
+      prior_mean: fit.quality_prior,
+      prior_effective_n: fit.pseudo_n
+    };
+  }
+  if (intelligenceMode || fit) {
+    return {
+      quality: CLASS_QUALITY_PRIOR.UNKNOWN,
+      source: 'model_intelligence_unknown',
+      capability_class: 'UNKNOWN',
+      unknown_reasons: fit?.problems || [],
+      real_n: 0,
+      real_successes: 0,
+      prior_mean: CLASS_QUALITY_PRIOR.UNKNOWN,
+      prior_effective_n: 0
+    };
+  }
   const direct = candidate.capability;
   if (Number.isFinite(direct?.posterior_mean)) {
     return {
@@ -664,7 +746,8 @@ function qualityEvidence(candidate, selectedTaskClass, learned, priors) {
       prior_effective_n: Number.isFinite(familyPrior.prior_effective_n) ? familyPrior.prior_effective_n : 0
     };
   }
-  const externalPrior = priorForRoute(candidate.route, priors);
+  const seed = role ? seedPriorAdmission({ route: candidate.route, role, critical: false, priors }) : { admitted: false };
+  const externalPrior = seed.admitted ? seed.prior : null;
   if (Number.isFinite(externalPrior?.prior_mean)) {
     return {
       quality: externalPrior.prior_mean,
@@ -675,7 +758,15 @@ function qualityEvidence(candidate, selectedTaskClass, learned, priors) {
       prior_effective_n: Number.isFinite(externalPrior.prior_effective_n) ? externalPrior.prior_effective_n : 0
     };
   }
-  return { quality: 0.50, source: 'untested', real_n: 0, real_successes: 0, prior_mean: 0.5, prior_effective_n: 0 };
+  return {
+    quality: 0.50,
+    source: 'untested',
+    ...(seed.reason && !seed.admitted && seed.reason !== 'no seed prior for this route' ? { unknown_reasons: [seed.reason] } : {}),
+    real_n: 0,
+    real_successes: 0,
+    prior_mean: 0.5,
+    prior_effective_n: 0
+  };
 }
 
 export function stageAHardRequirements({
@@ -683,6 +774,7 @@ export function stageAHardRequirements({
   liveQuota = {},
   poolEconomics = {},
   dataClass,
+  // Accepted for API compatibility; challenger lifecycle status no longer gates.
   allowChallengers = false,
   excludeRoutes = [],
   requiredEffort = null,
@@ -698,20 +790,16 @@ export function stageAHardRequirements({
       reject('Excluded by fallback re-routing policy');
       continue;
     }
+    // Captain policy and spend facts, re-checked here for callers that build
+    // candidates themselves.  Evaluation lifecycle stages (CHALLENGER and the
+    // rest) are audit history and never reject a route.
     if (candidate.capabilityStatus === 'MANUAL_ONLY') {
-      reject('Lifecycle Blocked: MANUAL_ONLY candidate requires manual captain specification');
+      reject('Captain policy: MANUAL_ONLY candidate requires manual captain specification');
       continue;
     }
-    if (candidate.capabilityStatus === 'CHALLENGER' && !allowChallengers) {
-      reject('Lifecycle Blocked: CHALLENGER candidate blocked under non-exploratory policy');
-      continue;
-    }
-    if (candidate.capabilityStatus === 'CREDIT_GATED' || ['BROKEN', 'MANUAL_ONLY', 'CREDIT_GATED'].includes(route.routing_status) || route.availability === 'credit_gated') {
-      reject(`Unavailable / Lifecycle blocked (${route.routing_status || candidate.capabilityStatus})`);
-      continue;
-    }
-    if (route.availability && !['available', 'unknown'].includes(route.availability)) {
-      reject(`Unavailable route (${route.availability})`);
+    const routeState = candidate.routeState || routeStateDimensions(route);
+    if (candidate.capabilityStatus === 'CREDIT_GATED' || routeState.hard_blockers.length) {
+      reject(`Hard blocker: ${routeState.hard_blockers.join('; ') || 'capability record CREDIT_GATED'}`);
       continue;
     }
     if (effortWasExplicit && route.reasoning_effort && requiredEffort && route.reasoning_effort !== requiredEffort) {
@@ -746,26 +834,49 @@ export function stageAHardRequirements({
   return { survivors, rejected };
 }
 
+// Stage B applies the task's quality requirement to each candidate's semantic
+// evidence.  Uncertainty tolerance belongs to the task, not the route:
+// - ordinary tasks compare the floor with the evidence mean;
+// - a retry-tolerant, non-critical, non-high-risk task also admits a candidate
+//   with no semantic judgment (unknown, untested, or LOW-confidence intelligence)
+//   whose credible upper bound reaches the floor, so a new or obscure route can
+//   compete for low-risk work while Stage C still prices its mean; a confident
+//   judgment below the floor is never overridden;
+// - high-risk classes rank Stage C by the conservative lower bound;
+// - a task marked critical needs real evidence (legacy) or HIGH-confidence Model
+//   Intelligence on a route whose task capabilities are VALIDATED.
+function evidenceIsUncertain(evidence) {
+  if (evidence.real_n > 0) return false;
+  if (evidence.source === 'untested' || evidence.source === 'model_intelligence_unknown') return true;
+  return evidence.source === 'model_intelligence' && evidence.confidence === 'LOW';
+}
+
 export function stageBQualityGate({
   candidates = [],
   taskClass,
+  role = null,
   critical = false,
+  retryTolerant = false,
   qualityFloor = null,
   learned = null,
-  priors = null
+  priors = null,
+  intelligenceMode = false
 } = {}) {
   const floor = qualityFloorForTask({ taskClass, critical, qualityFloor });
   const highRisk = isHighRiskTaskClass(taskClass, critical);
+  const lowRiskTask = retryTolerant && !critical && !highRisk;
   const survivors = [];
   const rejected = [];
   for (const candidate of candidates) {
-    const evidence = qualityEvidence(candidate, taskClass, learned, priors);
+    const evidence = qualityEvidence(candidate, taskClass, learned, priors, { intelligenceMode, role, critical });
     evidence.credible = capabilityCredibleInterval({
       priorMean: evidence.prior_mean,
       priorEffectiveN: evidence.prior_effective_n,
       realN: evidence.real_n,
       realSuccesses: evidence.real_successes
     });
+    const upperBound = Math.min(1, evidence.credible.mean + evidence.credible.z * evidence.credible.sd);
+    evidence.credible.upper_bound = Number(upperBound.toFixed(6));
     // The floor stays on the posterior mean; high-risk classes carry the
     // conservative bound into Stage C so evidence depth, not a marginal mean, ranks.
     const successProbability = highRisk
@@ -774,14 +885,28 @@ export function stageBQualityGate({
     evidence.high_risk = highRisk;
     evidence.success_probability = successProbability;
     const enriched = { ...candidate, qualityScore: evidence.quality, successProbability, qualityEvidence: evidence };
-    if (evidence.quality < floor) {
-      rejected.push({
-        route_id: candidate.route.route_id,
-        reason: `Quality floor rejected route: P(success) ${evidence.quality.toFixed(4)} < ${floor.toFixed(4)}`,
-        stage: 'B_quality_floor',
-        quality: evidence.quality,
-        quality_source: evidence.source
-      });
+    const reject = (reason) => rejected.push({
+      route_id: candidate.route.route_id,
+      reason,
+      stage: 'B_quality_floor',
+      quality: evidence.quality,
+      quality_source: evidence.source
+    });
+    if (critical) {
+      const validatedIntelligence = evidence.source === 'model_intelligence' && evidence.confidence === 'HIGH' &&
+        candidate.routeState?.validation === 'VALIDATED';
+      if (evidence.source !== 'real_capability' && !validatedIntelligence) {
+        reject('critical tasks require real capability evidence or HIGH-confidence Model Intelligence on a VALIDATED route');
+        continue;
+      }
+    }
+    if (evidence.quality >= floor) {
+      evidence.admitted_by = 'quality_floor';
+    } else if (lowRiskTask && evidenceIsUncertain(evidence) && upperBound >= floor) {
+      evidence.admitted_by = 'low_risk_uncertainty_tolerance';
+    } else {
+      const extra = evidence.unknown_reasons?.length ? ` (${evidence.unknown_reasons.join('; ')})` : '';
+      reject(`Quality floor rejected route: P(success) ${evidence.quality.toFixed(4)} < ${floor.toFixed(4)}${extra}`);
       continue;
     }
     survivors.push(enriched);
@@ -807,7 +932,7 @@ export function scoreAndSelectRoute({
   if (!dataClass || dataClass === 'UNKNOWN') {
     throw new Error(`dataClass is required and must not be empty or UNKNOWN (fail-closed policy)`);
   }
-  const { registry, policy, priors, learned, compiledRoutes } = loadConfigs();
+  const { registry, policy, priors, learned, compiledRoutes, modelIntelligence, routeValidation } = loadConfigs();
   if (!registry.canonical_roles.includes(role)) {
     throw new Error(`Cannot route unknown role: "${role}"`);
   }
@@ -821,7 +946,10 @@ export function scoreAndSelectRoute({
     policy,
     learned,
     priors,
-    compiledRoutes
+    compiledRoutes,
+    modelIntelligence,
+    routeValidation,
+    now
   });
   const selectedTaskClass = capabilityQuery.taskClass;
 
@@ -848,10 +976,13 @@ export function scoreAndSelectRoute({
   const stageB = stageBQualityGate({
     candidates: stageA.survivors,
     taskClass: selectedTaskClass,
+    role,
     critical,
+    retryTolerant,
     qualityFloor,
     learned,
-    priors
+    priors,
+    intelligenceMode: capabilityQuery.intelligenceMode
   });
   const rejectedRoutes = [...candidateGenerationRejections, ...stageA.rejected, ...stageB.rejected];
   if (stageA.survivors.length === 0) {
@@ -871,6 +1002,7 @@ export function scoreAndSelectRoute({
       candidateBasis: candidate.candidateBasis,
       successProbability: candidate.successProbability ?? candidate.qualityScore,
       effortFitScore: effortFit,
+      operationalHealth: candidate.routeState?.operational_health,
       now
     });
     const arbitrageNote = candidate.route.harness === 'antigravity' && candidate.route.provider_path === 'antigravity_3p_gateway'
@@ -907,6 +1039,11 @@ export function scoreAndSelectRoute({
     viableCandidatesCount: stageA.survivors.length,
     sufficientCandidatesCount: stageB.survivors.length,
     qualityFloor: stageB.floor,
+    modelIntelligence: {
+      mode: capabilityQuery.intelligenceMode ? 'model_intelligence' : 'legacy_capability_evidence',
+      path: modelIntelligence?.path || null,
+      errors: [...(modelIntelligence?.errors || []), ...(routeValidation?.errors || [])]
+    },
     resourcePools: RESOURCE_POOLS,
     rejectedRoutes,
     stages: {
@@ -945,6 +1082,9 @@ export function scoreAndSelectRoute({
       real_n: s.real_n,
       quality: s.qualityScore,
       quality_source: s.qualityEvidence.source,
+      capability_class: s.qualityEvidence.capability_class ?? null,
+      admitted_by: s.qualityEvidence.admitted_by,
+      route_state: s.routeState,
       quality_credible_lower_bound: s.qualityEvidence.credible?.lower_bound ?? null,
       quality_credible_width: s.qualityEvidence.credible?.width ?? null,
       pool: s.economics.resource_pool,
@@ -964,6 +1104,10 @@ export function scoreAndSelectRoute({
       expected_successful_quota_burn: s.economics.expected_successful_quota_burn,
       task_success_probability: s.economics.task_success_probability,
       quality: s.qualityScore,
+      quality_source: s.qualityEvidence.source,
+      capability_class: s.qualityEvidence.capability_class ?? null,
+      admitted_by: s.qualityEvidence.admitted_by,
+      route_state: s.routeState,
       capability_status: s.capabilityStatus,
       candidate_basis: s.candidateBasis,
       real_n: s.real_n,
@@ -1745,7 +1889,8 @@ export function recordTaskCompletion(taskId, {
   parentExecutionId = null,
   tokensConsumed = null,
   cacheEfficiency = null,
-  latencyMs = null
+  latencyMs = null,
+  failureAttribution = null
 } = {}) {
   const metaPath = homePath(path.join('state', `${taskId}.meta`));
   let meta = {};
@@ -1862,6 +2007,9 @@ export function recordTaskCompletion(taskId, {
     dispatch_status: 'completed',
     lifecycle_state: terminalState === 'SUCCESS' ? 'COMPLETED' : 'FAILED',
     terminal_state: terminalState,
+    // Unattributed failures default to AMBIGUOUS: operational telemetry that never
+    // changes model capability (docs/router-v3-model-intelligence-schema.md).
+    failure_attribution: terminalState === 'SUCCESS' ? null : normalizeAttribution(failureAttribution),
     exit_code: exitCode,
     artifact_path: hasReport ? `data/${taskId}/report.md` : null,
     result_summary: resultSummary || (hasReport ? fs.readFileSync(reportPath, 'utf8').slice(0, 300) : ''),
@@ -2277,7 +2425,8 @@ if (process.argv[1] && process.argv[1].endsWith('fm-router-v2.mjs')) {
     const taskId = process.argv[3];
     const state = process.argv[4] || 'SUCCESS';
     const summary = process.argv[5] || '';
-    const res = recordTaskCompletion(taskId, { terminalState: state, resultSummary: summary });
+    // Optional sixth argument: failure attribution; unattributed failures record AMBIGUOUS.
+    const res = recordTaskCompletion(taskId, { terminalState: state, resultSummary: summary, failureAttribution: process.argv[6] || null });
     console.log(JSON.stringify(res, null, 2));
   } else if (cmd === 'teardown') {
     const taskId = process.argv[3];
