@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import vm from 'node:vm';
 import { makeRouterFixtureHome } from './router-v2-fixture.mjs';
 
 const home = makeRouterFixtureHome();
@@ -55,6 +56,21 @@ const noCredential = discovery.discoverOpenCodeGo({
 });
 assert.equal(noCredential.stale, true);
 assert.equal(noCredential.refresh_failed, true);
+
+// The live catalog request runs as a child script, so it must compile.
+assert.doesNotThrow(() => new vm.Script(discovery.openCodeCatalogRequestScript()));
+
+// A refresh that falls back to an old snapshot must not publish its models as
+// available under a freshly written compiled catalog.
+const staleFallbackRoutes = discovery.compileRouteTargets({
+  codex: { ...codex, stale: true, refresh_failed: true, discovered_at: '2020-01-01T00:00:00Z' },
+  claude: { ...claude, stale: true, refresh_failed: true, discovered_at: new Date().toISOString() },
+  antigravity: { harness: 'antigravity', discovered_at: new Date().toISOString(), gemini_native: [], third_party: [] },
+  opencode_go: { ...openCode, stale: true, refresh_failed: true, discovered_at: '2020-01-01T00:00:00Z' }
+});
+assert.ok(staleFallbackRoutes.filter(route => route.harness === 'codex').every(route => route.availability === 'stale_catalog'));
+assert.ok(staleFallbackRoutes.filter(route => route.harness === 'opencode').every(route => route.availability === 'stale_catalog'));
+assert.ok(staleFallbackRoutes.filter(route => route.harness === 'claude').every(route => route.availability !== 'stale_catalog'));
 
 const fallback = discovery.discoverCodex({ cachePath: path.join(home, 'missing-cache.json') });
 assert.equal(fallback.stale, true);

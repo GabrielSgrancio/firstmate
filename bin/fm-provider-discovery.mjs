@@ -397,6 +397,27 @@ export function discoverAntigravity({ agyBin = process.env.AGY_BIN || '/home/gab
   };
 }
 
+// The bearer key reaches the child only through its environment.
+export function openCodeCatalogRequestScript() {
+  return [
+    "const https = require('node:https');",
+    "const request = https.get('https://opencode.ai/zen/go/v1/models', {",
+    "  headers: {",
+    "    'User-Agent': 'opencode/1.18.30 (linux; x64)',",
+    "    Authorization: 'Bearer ' + process.env.FM_OPENCODE_BEARER",
+    "  }",
+    "}, response => {",
+    "  let body = '';",
+    "  response.on('data', chunk => body += chunk);",
+    "  response.on('end', () => {",
+    "    if (response.statusCode !== 200) process.exitCode = 1;",
+    "    process.stdout.write(body);",
+    "  });",
+    "});",
+    "request.on('error', () => process.exit(1));"
+  ].join('\n');
+}
+
 // 4. OpenCode Go Discovery Adapter (HTTP endpoint, modeled as shared account pool)
 export function discoverOpenCodeGo({ authPath = null, fixturePath = null } = {}) {
   const resolvedAuthPath = authPath || path.join(process.env.HOME || '', '.local/share/opencode/auth.json');
@@ -418,23 +439,7 @@ export function discoverOpenCodeGo({ authPath = null, fixturePath = null } = {})
   }
 
   try {
-    const requestScript = [
-      "const https = require('node:https');",
-      "const request = https.get('https://opencode.ai/zen/go/v1/models', {",
-      "  headers: {",
-      "    'User-Agent': 'opencode/1.18.30 (linux; x64)',",
-      "    Authorization: 'Bearer ' + process.env.FM_OPENCODE_BEARER",
-      "  }",
-      "}, response => {",
-      "  let body = '';",
-      "  response.on('data', chunk => body += chunk);",
-      "  response.on('end', () => {",
-      "    if (response.statusCode !== 200) process.exitCode = 1;",
-      "    process.stdout.write(body);",
-      "  });",
-      "});",
-      "request.on('error', () => process.exit(1));"
-    ].join('\\n');
+    const requestScript = openCodeCatalogRequestScript();
     const out = execFileSync(process.execPath, ['-e', requestScript], {
       timeout: 10000,
       encoding: 'utf8',
@@ -519,6 +524,20 @@ function brokenRoute(harness, catalog) {
   };
 }
 
+const CATALOG_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+// A failed refresh reuses the previous snapshot, which keeps its original
+// discovered_at.  Rewriting those models into a freshly written compiled file
+// would launder an old catalog past the router's freshness check, so routes from
+// a fallback snapshot older than the router window are marked stale and Stage A
+// refuses them.
+function catalogAvailability(catalog, availability) {
+  if (catalog?.refresh_failed !== true) return availability;
+  const discoveredMs = new Date(catalog.discovered_at).getTime();
+  if (Number.isFinite(discoveredMs) && Date.now() - discoveredMs <= CATALOG_MAX_AGE_MS) return availability;
+  return 'stale_catalog';
+}
+
 export function compileRouteTargets(catalogs) {
   const routes = [];
 
@@ -545,7 +564,7 @@ export function compileRouteTargets(catalogs) {
         discovery_source: 'codex_models_cache',
         discovered_at: catalogs.codex.discovered_at,
         resolved_at: catalogs.codex.discovered_at,
-        availability: 'available',
+        availability: catalogAvailability(catalogs.codex, 'available'),
         smoke_tested: m.smoke_tested || false,
         routing_status: m.routing_status,
         metadata_provenance: m.metadata_provenance
@@ -577,7 +596,7 @@ export function compileRouteTargets(catalogs) {
         discovery_source: m.discovery_source || 'claude_code_cache_slots',
         discovered_at: catalogs.claude.discovered_at,
         resolved_at: catalogs.claude.discovered_at,
-        availability: m.availability,
+        availability: catalogAvailability(catalogs.claude, m.availability),
         smoke_tested: m.smoke_tested || false,
         routing_status: m.routing_status,
         metadata_provenance: m.metadata_provenance
@@ -608,7 +627,7 @@ export function compileRouteTargets(catalogs) {
       discovery_source: 'agy_cli_models',
       discovered_at: catalogs.antigravity.discovered_at,
       resolved_at: catalogs.antigravity.discovered_at,
-      availability: 'available',
+      availability: catalogAvailability(catalogs.antigravity, 'available'),
       smoke_tested: m.smoke_tested || false,
       routing_status: m.routing_status,
       metadata_provenance: m.metadata_provenance
@@ -634,7 +653,7 @@ export function compileRouteTargets(catalogs) {
       discovery_source: 'agy_cli_models',
       discovered_at: catalogs.antigravity.discovered_at,
       resolved_at: catalogs.antigravity.discovered_at,
-      availability: 'available',
+      availability: catalogAvailability(catalogs.antigravity, 'available'),
       smoke_tested: m.smoke_tested || false,
       routing_status: m.routing_status,
       metadata_provenance: m.metadata_provenance
@@ -660,7 +679,7 @@ export function compileRouteTargets(catalogs) {
       discovery_source: 'opencode_go_http_catalog',
       discovered_at: catalogs.opencode_go.discovered_at,
       resolved_at: catalogs.opencode_go.discovered_at,
-      availability: 'available',
+      availability: catalogAvailability(catalogs.opencode_go, 'available'),
       smoke_tested: m.smoke_tested || false,
       routing_status: m.routing_status,
       metadata_provenance: m.metadata_provenance
