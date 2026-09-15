@@ -243,17 +243,57 @@ for (const [operation, output] of [
   assert.ok(outputPack.telemetry.deterministic_context_tokens < outputPack.telemetry.raw_candidate_context_tokens);
 }
 
-const secret = sensitive.requestContext({
+// SECRET and any class outside the five-class taxonomy refuse the whole
+// operation: no query echo, source read, cache entry, slice, or artifact write.
+write(path.join(repo, 'classified.txt'), 'CLASSIFIED_SOURCE_MUST_NOT_DELIVER\n');
+const cacheDir = path.join(home, 'state', 'context-cache');
+const cacheEntries = () => (fs.existsSync(cacheDir) ? fs.readdirSync(cacheDir).length : 0);
+const cacheBefore = cacheEntries();
+assert.throws(() => sensitive.requestContext({
+  repoDir: repo,
+  operation: 'file_read',
+  filePath: 'classified.txt',
+  query: 'CLASSIFIED_QUERY_MUST_NOT_DELIVER',
+  dataClass: 'SECRET'
+}), /refuses SECRET data/);
+assert.throws(() => broker.requestContext({
+  repoDir: repo,
+  operation: 'generated_boilerplate',
+  artifactPath: 'classified-artifact.txt',
+  generatedContent: 'CLASSIFIED_GENERATED_PAYLOAD',
+  dataClass: 'SECRET'
+}), /refuses SECRET data/);
+assert.equal(fs.existsSync(path.join(repo, 'classified-artifact.txt')), false, 'a SECRET generated payload is never written');
+assert.throws(() => broker.requestContext({
+  repoDir: repo,
+  operation: 'file_read',
+  filePath: 'src/small.js',
+  query: 'target',
+  dataClass: 'WORK_CORPORATE'
+}), /unknown data class WORK_CORPORATE/);
+assert.equal(cacheEntries(), cacheBefore, 'refused operations persist no cache scope');
+const publicPack = broker.requestContext({ repoDir: repo, operation: 'read', filePath: 'classified.txt', query: 'x', dataClass: 'PUBLIC' });
+const secretScopedPack = structuredClone(publicPack);
+secretScopedPack.provenance.data_policy_scope = 'SECRET';
+assert.throws(() => readTargetedSlice({ pack: secretScopedPack, repoDir: repo, filePath: 'classified.txt' }), /refuses SECRET data/);
+assert.throws(() => readTargetedSlice({ pack: publicPack, repoDir: repo, filePath: 'classified.txt', dataClass: 'SECRET' }), /differs from the ContextPack scope/);
+assert.throws(() => readTargetedSlice({ pack: {}, repoDir: repo, filePath: 'classified.txt' }), /requires a classified dataClass/);
+assert.throws(() => readTargetedSlice({ repoDir: repo, filePath: 'classified.txt', dataClass: 'SECRET' }), /refuses SECRET data/);
+
+// Without a worker adapter no worker ran, so no worker tokens are counted as spent.
+const noAdapter = createContextBroker({ homeDir: home, routeSelector, dataGate: allowGate });
+const noAdapterPack = noAdapter.requestContext({
   repoDir: repo,
   operation: 'read',
-  content: 'API_KEY=not-returned',
-  path: 'secret.env',
-  query: 'key',
-  dataClass: 'SECRET'
+  content: source,
+  path: 'src/no-adapter.js',
+  query: 'needleHandler',
+  dataClass: 'PUBLIC'
 });
-assert.equal(secret.telemetry.context_worker_route, null);
-assert.equal(secret.findings[0].kind, 'secret_suppressed');
-assert.equal(renderContextPack(secret).includes('not-returned'), false);
+assert.equal(noAdapterPack.telemetry.fallback_to_direct_reasoner, true);
+assert.equal(noAdapterPack.telemetry.shunt_worker_input_tokens, 0);
+assert.equal(noAdapterPack.telemetry.shunt_worker_output_tokens, 0);
+assert.equal(noAdapterPack.telemetry.total_model_tokens_spent, noAdapterPack.telemetry.reasoner_context_tokens_delivered);
 
 const slice = readTargetedSlice({
   pack: huge,
@@ -308,7 +348,7 @@ console.log(JSON.stringify({
   condensed: condensed.telemetry,
   refused: { worker_refusal: refused.worker_refusal, worker_route: refused.telemetry.context_worker_route },
   actual_policy_refused: { worker_refusal: actualRefused.worker_refusal, worker_route: actualRefused.telemetry.context_worker_route },
-  secret: { worker_route: secret.telemetry.context_worker_route, suppressed: secret.findings[0].kind },
+  no_adapter: noAdapterPack.telemetry,
   generated_artifact_bytes: artifact.artifact.bytes,
   routed_context_route: routed.telemetry.context_worker_route,
   dispatch_context_route: dispatched.contextPack.telemetry.context_worker_route,

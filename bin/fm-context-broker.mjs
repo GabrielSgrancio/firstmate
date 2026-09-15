@@ -614,9 +614,20 @@ function rawSourceText(sources) {
   return sources.map((source) => `${source.path}\n${source.content}`).join('\n');
 }
 
+const CONTEXT_DATA_CLASSES = new Set(['PUBLIC', 'SANITIZED', 'PRIVATE_CODE', 'PERSONAL_SENSITIVE', 'SECRET']);
+
+// The exact five-class taxonomy is validated before any source is read, and
+// SECRET refuses the whole operation: no query echo, source read, slice, cache,
+// or artifact write happens for it.
 function normalizedDataClass(dataClass) {
   if (!dataClass || dataClass === 'UNKNOWN') throw new Error('Context Broker requires a classified dataClass');
-  return String(dataClass);
+  if (!CONTEXT_DATA_CLASSES.has(dataClass)) {
+    throw new Error(`Context Broker refuses unknown data class ${dataClass}; expected one of ${[...CONTEXT_DATA_CLASSES].join(', ')}`);
+  }
+  if (dataClass === 'SECRET') {
+    throw new Error('Context Broker refuses SECRET data: it is strictly excluded from all model context, so the operation is not performed');
+  }
+  return dataClass;
 }
 
 function telemetryForPack(pack) {
@@ -660,8 +671,8 @@ export function createContextBroker({
 
   function requestContext(request = {}) {
     const startedAt = Date.now();
-    const repoDir = normalizedRepoDir(request.repoDir);
     const dataClass = normalizedDataClass(request.dataClass);
+    const repoDir = normalizedRepoDir(request.repoDir);
     const operation = operationFromRequest(request);
     const collected = collectSources(request, repoDir, operation);
     const rawText = rawSourceText(collected.sources);
@@ -686,7 +697,7 @@ export function createContextBroker({
     };
     const cacheKey = jsonHash(fingerprint);
     const cachePath = cacheFileFor(homeDir, cacheKey);
-    const cacheable = dataClass !== 'SECRET' && classification.operation !== 'generated_boilerplate';
+    const cacheable = classification.operation !== 'generated_boilerplate';
     const cached = cacheable ? readCachedPack(cachePath, cacheKey) : null;
     if (cached) {
       const cachedPack = structuredClone(cached);
@@ -752,11 +763,12 @@ export function createContextBroker({
             repo_state: state,
             data_class: dataClass
           };
-          workerInputTokens = countTokens(JSON.stringify(workerInput));
           if (typeof shuntWorker !== 'function') {
+            // No worker ran, so no worker tokens were spent.
             fallback = true;
             unresolved.push('No provider adapter was supplied for the selected context worker; compact deterministic evidence is delivered to the reasoner.');
           } else {
+            workerInputTokens = countTokens(JSON.stringify(workerInput));
             const result = shuntWorker(workerInput, { route: selected.route, decision: selected.decision, dataClass });
             const workerText = typeof result === 'string' ? result : JSON.stringify(result || {});
             workerOutputTokens = countTokens(workerText);
@@ -784,19 +796,6 @@ export function createContextBroker({
     if (classification.operation === 'generated_boilerplate' && request.artifactPath) {
       artifact = safeArtifact(repoDir, request.artifactPath, request.generatedContent ?? request.content ?? '', request.overwrite === true);
       findings = [...findings, { kind: 'artifact_written', summary: `Generated artifact written at ${artifact.path}.`, path: artifact.path }];
-    }
-
-    if (dataClass === 'SECRET') {
-      findings = [{ kind: 'secret_suppressed', summary: 'SECRET payload was suppressed before any model or context-worker handoff.' }];
-      relevantFiles = [];
-      relevantSymbols = [];
-      relevantRanges = [];
-      unresolved = ['The classified SECRET payload cannot be delivered through Context Broker.'];
-      workerRoute = null;
-      workerPool = null;
-      workerInputTokens = 0;
-      workerOutputTokens = 0;
-      fallback = false;
     }
 
     const draft = {
@@ -880,7 +879,12 @@ export function renderContextPack(pack) {
   return compactPackText(pack);
 }
 
-export function readTargetedSlice({ pack, repoDir, filePath, startLine = 1, endLine = startLine } = {}) {
+export function readTargetedSlice({ pack, repoDir, filePath, startLine = 1, endLine = startLine, dataClass = null } = {}) {
+  const packClass = pack?.provenance?.data_policy_scope || null;
+  if (dataClass && packClass && dataClass !== packClass) {
+    throw new Error(`targeted slice refused because data class ${dataClass} differs from the ContextPack scope ${packClass}`);
+  }
+  normalizedDataClass(dataClass || packClass);
   const root = normalizedRepoDir(repoDir);
   const absolute = resolveRepoPath(root, filePath, 'slice file path');
   const relative = relativePath(root, absolute);
