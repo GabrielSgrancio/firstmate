@@ -1136,6 +1136,31 @@ SH
 }
 
 test_worker_launch_delivers_role_scope
+
+test_context_pack_is_exported_to_worker() {
+  local rec id out launch context_pack
+  id=context-pack-launch-z1
+  rec=$(make_spawn_case context-pack-launch codex "$id")
+  read_case_record "$rec"
+  context_pack="$HOME_DIR/state/context-pack.json"
+  printf '%s\n' '{}' > "$context_pack"
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
+    "$id" "$PROJ_DIR" --context-pack "$context_pack")
+  expect_code 0 "$?" "spawn with a Context Broker pack should succeed: $out"
+  launch=$(cat "$LAUNCH_LOG")
+  assert_contains "$launch" "FM_CONTEXT_PACK='$context_pack'" \
+    "worker launch did not export the Context Broker pack"
+  assert_contains "$launch" "FM_CONTEXT_BROKER='$ROOT/bin/fm-context-broker.mjs'" \
+    "worker launch did not export the canonical Context Broker command"
+  assert_grep "context_pack=$context_pack" "$HOME_DIR/state/$id.meta" \
+    "task metadata did not retain the Context Broker pack path"
+  assert_contains "$(cat "$HOME_DIR/data/$id/launch-brief.md")" \
+    "The Context Broker pack for this task is at \`$context_pack\`." \
+    "launch brief did not identify the Context Broker pack"
+  pass "fm-spawn exports the Context Broker pack and command to the worker"
+}
+
+test_context_pack_is_exported_to_worker
 test_no_profile_keeps_claude_profile_defaults
 test_non_cursor_launch_clears_inherited_cursor_markers
 test_relative_home_overrides_launch_with_absolute_cross_process_paths

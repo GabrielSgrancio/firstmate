@@ -348,6 +348,9 @@ family_for_basename() {
     fm-review-diff.test.sh|fm-teardown.test.sh|fm-x-mode.test.sh)
       printf '%s\n' pr-forge
       ;;
+    fm-context-broker.test.sh)
+      printf '%s\n' standalone
+      ;;
     fm-afk-inject-e2e.test.sh|fm-afk-return.test.sh)
       printf '%s\n' afk
       ;;
@@ -1214,6 +1217,15 @@ families_for_changed_path() {
       # A single test file change selects only that script via basename family
       # resolution in the caller; emit a marker family of __script__
       printf '%s\n' "__script__:$(basename "$path")"
+      ;;
+    tests/*.test.mjs)
+      # Node behavior tests use a same-basename shell adapter so the canonical
+      # runner can execute them without changing its shell process contract.
+      if [ -f "${path%.mjs}.sh" ]; then
+        printf '%s\n' "__script__:$(basename "${path%.mjs}.sh")"
+      else
+        printf '%s\n' "__unmapped__:$path"
+      fi
       ;;
     bin/fm-test-run.sh|bin/fm-test-isolation-proof.sh)
       # Deliberately the WHOLE family, not just the two contract tests. This

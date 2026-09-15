@@ -22,6 +22,7 @@ import {
   collectRoutingObservations,
   selectEconomicRoute
 } from './fm-routing-economics.mjs';
+import { createContextBroker } from './fm-context-broker.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const currentFmHome = () => path.resolve(process.env.FM_HOME || ROOT);
@@ -254,20 +255,16 @@ export function evaluateDataGate(dataClass, targetProfileName, routeContext = {}
 }
 
 export function planContextShunting(rawTokenCount, taskComplexity) {
-  const SHUNT_THRESHOLD = 50000;
-  if (rawTokenCount > SHUNT_THRESHOLD) {
-    return {
-      shuntingRequired: true,
-      bulkReaderRole: 'fast_context',
-      bulkReaderModel: 'gemini-3.8-flash',
-      codeWriterRole: taskComplexity === 'high' ? 'deep_engineer' : 'general_engineer',
-      strategy: 'Bulk reader extracts high-density AST/diff brief; code writer receives target brief only',
-      estimatedTokenSavingsPct: 88
-    };
-  }
+  const shuntingRequired = Number(rawTokenCount) > 12000;
   return {
-    shuntingRequired: false,
-    strategy: 'Direct context injection within normal bounds'
+    shuntingRequired,
+    bulkReaderRole: shuntingRequired ? 'fast_context' : null,
+    contextWorkerRole: shuntingRequired ? 'fast_context' : null,
+    workerSelection: shuntingRequired ? 'dynamic_router_v2' : null,
+    codeWriterRole: taskComplexity === 'high' ? 'deep_engineer' : 'general_engineer',
+    strategy: shuntingRequired
+      ? 'Context Broker deterministically extracts evidence, then selects a worker through Router V2; the reasoner receives the ContextPack.'
+      : 'Direct context injection within the Context Broker direct bound'
   };
 }
 
@@ -1236,6 +1233,22 @@ export function dispatchThroughHerdr({
     throw new Error(`dispatchThroughHerdr: task ${taskId} must be provisioned by the task intake owner; missing brief at ${briefPath}`);
   }
 
+  const effectiveProjectDir = projectDir || currentFmHome();
+  const contextBroker = createContextBroker({
+    homeDir: currentFmHome(),
+    routeSelector: (params) => scoreAndSelectRoute(params),
+    dataGate: evaluateDataGate
+  });
+  const contextPack = contextBroker.requestContext({
+    taskId,
+    repoDir: effectiveProjectDir,
+    query: [intent, spec].filter(Boolean).join('\n'),
+    operation: 'broad_repository_scan',
+    dataClass,
+    interpretationNeeded: false,
+    useLiveAxi
+  });
+
   const execId = routeExecutionId || `rex-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
   const rootExecId = parentExecutionId || execId;
 
@@ -1261,7 +1274,9 @@ export function dispatchThroughHerdr({
       arbitrage_reason: decision.arbitrageReason,
       quality_floor: decision.qualityFloor,
       selected_route_economics: decision.selectedRouteEconomics,
-      stages: decision.stages
+      stages: decision.stages,
+      context_pack: contextPack.provenance?.pack_sha256 || null,
+      context_telemetry: contextPack.telemetry
     },
     quotaSnapshotBefore: decision.liveQuotaPools,
     selectedRouteId: selectedRoute.route_id,
@@ -1288,7 +1303,6 @@ export function dispatchThroughHerdr({
     }
   });
 
-  const effectiveProjectDir = projectDir || currentFmHome();
   const spawnArgs = [path.join(ROOT, 'bin', 'fm-spawn.sh'), taskId, effectiveProjectDir];
   if (scout) {
     spawnArgs.push('--scout');
@@ -1302,6 +1316,9 @@ export function dispatchThroughHerdr({
   spawnArgs.push('--route-id', selectedRoute.route_id);
   spawnArgs.push('--route-execution-id', execId);
   spawnArgs.push('--parent-execution-id', rootExecId);
+  if (contextPack.provenance?.cache_key) {
+    spawnArgs.push('--context-pack', path.join(currentFmHome(), 'state', 'context-cache', `${contextPack.provenance.cache_key}.json`));
+  }
   if (selectedRoute.reasoning_effort) {
     const effort = selectedRoute.reasoning_effort === 'ultra' ? 'max' : selectedRoute.reasoning_effort;
     if (['low', 'medium', 'high', 'xhigh', 'max'].includes(effort)) {
@@ -1459,6 +1476,7 @@ export function dispatchThroughHerdr({
     routeExecutionId: execId,
     routeDecision: decision,
     selectedRoute,
+    contextPack,
     herdr: {
       window: meta.window,
       session: meta.herdr_session,

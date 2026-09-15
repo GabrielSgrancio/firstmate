@@ -12,6 +12,28 @@ Run `FM_HOME=<home> node bin/fm-provider-discovery.mjs refresh` to refresh provi
 
 Run `FM_HOME=<home> node bin/fm-router-v2.mjs validate` after refreshing to validate the static role and policy inputs.
 
+## Context Broker
+
+`bin/fm-context-broker.mjs` is the runtime context boundary used by Router dispatch.
+
+It classifies reads, repository scans, grep/reference results, test/build output, logs, and generated boilerplate before a premium reasoner receives them.
+
+Small targeted reads stay direct.
+
+Oversized and multi-file inputs are deterministically reduced first, then may be sent to a context worker selected through the same Router capability and economics machinery as the primary route.
+
+The context worker is checked with `evaluateDataGate` for the actual payload data class before any worker callback receives source content.
+
+Each non-secret request emits a versioned `ContextPack` under the private `state/context-cache/` directory with source hashes, repository state, relevant files and ranges, findings, commands, unresolved questions, and token telemetry.
+
+The cache key includes repository state, relevant source hashes, query, operation, and data-policy scope, so changing relevant input cannot reuse stale evidence.
+
+`fm-spawn.sh --context-pack <path>` exports `FM_CONTEXT_PACK` and `FM_CONTEXT_BROKER` to the worker and adds the pack contract to its launch brief.
+
+Premium workers can use the broker's targeted-slice operation to retrieve exact lines after validating the pack's source hash.
+
+Generated boilerplate may be written directly to a repository artifact with the broker, leaving the premium worker the artifact path, hash, diff stat, and validation result.
+
 Compiled catalogs and quota maps older than 24 hours are treated as stale, and missing or stale RouteTargets fail closed by producing no viable route rather than assuming abundance.
 
 `bin/fm-quota-normalize.mjs` accepts quota-axi schema versions 3 and 5 and retains the source schema version in provenance.

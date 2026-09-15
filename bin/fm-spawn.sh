@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Spawn a direct report: a crewmate in a treehouse or Orca worktree, or a
 # secondmate in its isolated firstmate home.
-# Usage: fm-spawn.sh <task-id> <project-dir> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>]
-#        fm-spawn.sh <task-id> <project-dir> --scout [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>]
+# Usage: fm-spawn.sh <task-id> <project-dir> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--context-pack <path>]
+#        fm-spawn.sh <task-id> <project-dir> --scout [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--context-pack <path>]
 #        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] --secondmate
 #   --mode and --yolo are this task's delivery contract, REQUIRED for every ship
 #   spawn and refused on --scout and --secondmate spawns. Firstmate resolves both
@@ -68,6 +68,10 @@
 #   codex-app is not a known backend yet; docs/codex-app-backend.md owns that
 #   blocked backend contract. Default tmux spawns do not write backend= to meta;
 #   absent backend= means tmux. cmux does not support --secondmate spawns yet.
+#   --context-pack points the worker at the Context Broker's compact evidence
+#   artifact. The spawn exports FM_CONTEXT_PACK and FM_CONTEXT_BROKER to every
+#   child process, so premium workers can request a verified targeted slice
+#   without re-ingesting the original bulk operation.
 #   A backend spawn refusal (missing dependency, version gate, unauthenticated
 #   socket, or unsupported secondmate mode) is terminal for that selected backend;
 #   callers must surface it instead of silently retrying another backend.
@@ -457,6 +461,7 @@ ROUTE_ID=
 ROUTE_EXECUTION_ID=
 PARENT_EXECUTION_ID=
 BACKEND_ARG=
+CONTEXT_PACK=
 MODE=
 YOLO=
 TRACEPARENT_ARG=
@@ -469,6 +474,7 @@ ROUTE_ID_SET=0
 ROUTE_EXECUTION_ID_SET=0
 PARENT_EXECUTION_ID_SET=0
 BACKEND_SET=0
+CONTEXT_PACK_SET=0
 MODE_SET=0
 YOLO_SET=0
 TRACEPARENT_SET=0
@@ -490,6 +496,7 @@ for a in "$@"; do
       route_execution_id) ROUTE_EXECUTION_ID=$a; ROUTE_EXECUTION_ID_SET=1 ;;
       parent_execution_id) PARENT_EXECUTION_ID=$a; PARENT_EXECUTION_ID_SET=1 ;;
       backend) BACKEND_ARG=$a; BACKEND_SET=1 ;;
+      context_pack) CONTEXT_PACK=$a; CONTEXT_PACK_SET=1 ;;
       mode) MODE=$a; MODE_SET=1 ;;
       yolo) YOLO=$a; YOLO_SET=1 ;;
       traceparent) TRACEPARENT_ARG=$a; TRACEPARENT_SET=1 ;;
@@ -520,6 +527,8 @@ for a in "$@"; do
     --parent-execution-id=*) PARENT_EXECUTION_ID=${a#--parent-execution-id=}; PARENT_EXECUTION_ID_SET=1 ;;
     --backend) want_value=backend ;;
     --backend=*) BACKEND_ARG=${a#--backend=}; BACKEND_SET=1 ;;
+    --context-pack) want_value=context_pack ;;
+    --context-pack=*) CONTEXT_PACK=${a#--context-pack=}; CONTEXT_PACK_SET=1 ;;
     --mode) want_value=mode ;;
     --mode=*) MODE=${a#--mode=}; MODE_SET=1 ;;
     --yolo) want_value=yolo ;;
@@ -539,6 +548,7 @@ done
 [ "$ROUTE_EXECUTION_ID_SET" -eq 0 ] || [ -n "$ROUTE_EXECUTION_ID" ] || { echo "error: --route-execution-id requires a non-empty value" >&2; exit 1; }
 [ "$PARENT_EXECUTION_ID_SET" -eq 0 ] || [ -n "$PARENT_EXECUTION_ID" ] || { echo "error: --parent-execution-id requires a non-empty value" >&2; exit 1; }
 [ "$BACKEND_SET" -eq 0 ] || [ -n "$BACKEND_ARG" ] || { echo "error: --backend requires a non-empty value" >&2; exit 1; }
+[ "$CONTEXT_PACK_SET" -eq 0 ] || [ -n "$CONTEXT_PACK" ] || { echo "error: --context-pack requires a non-empty value" >&2; exit 1; }
 [ "$MODE_SET" -eq 0 ] || [ -n "$MODE" ] || { echo "error: --mode requires a non-empty value" >&2; exit 1; }
 [ "$YOLO_SET" -eq 0 ] || [ -n "$YOLO" ] || { echo "error: --yolo requires a non-empty value" >&2; exit 1; }
 [ "$TRACEPARENT_SET" -eq 0 ] || [ -n "$TRACEPARENT_ARG" ] || { echo "error: --traceparent requires a non-empty value" >&2; exit 1; }
@@ -1331,6 +1341,9 @@ if [ "$RELAUNCH" -eq 1 ]; then
   [ -n "$KIND" ] || KIND=ship
   MODE=$(fm_meta_get "$RELAUNCH_META" mode)
   YOLO=$(fm_meta_get "$RELAUNCH_META" yolo)
+  if [ "$CONTEXT_PACK_SET" -eq 0 ]; then
+    CONTEXT_PACK=$(fm_meta_get "$RELAUNCH_META" context_pack)
+  fi
   RELAUNCH_WT=$(fm_meta_get "$RELAUNCH_META" worktree)
   [ -n "$RELAUNCH_WT" ] && [ -d "$RELAUNCH_WT" ] || {
     echo "error: task $ID's recorded worktree '${RELAUNCH_WT:-none}' is missing; refusing to relaunch without the local copy its work lives in" >&2
@@ -2310,9 +2323,15 @@ if [ "$KIND" = ship ] || [ "$KIND" = scout ]; then
   BRIEF="$DATA/$ID/launch-brief.md"
   BRIEF_TMP="$DATA/$ID/.launch-brief.md.${BASHPID:-$$}"
   {
-    cat "$SOURCE_BRIEF" &&
+      cat "$SOURCE_BRIEF" &&
       printf '\n' &&
       fm_brief_worker_role &&
+      if [ -n "$CONTEXT_PACK" ]; then
+        printf '\n## Context Broker\n' &&
+          printf '%s\n' "The Context Broker pack for this task is at \`$CONTEXT_PACK\`." &&
+          printf '%s\n' "Use \`$FM_ROOT/bin/fm-context-broker.mjs\` for bulk repository reads, scans, grep output, logs, tests, and builds." &&
+          printf '%s\n' 'Narrow source slices may use the broker slice command, which verifies the pack source hash before returning exact lines.'
+      fi
       if [ "$KIND" = ship ] && [ "$MODE" = no-mistakes ]; then
         fm_brief_intent_overlay "$CAPTAIN_INTENT"
       fi
@@ -2358,6 +2377,17 @@ fi
 
 BRIEF_DIR_REAL=$(cd "$(dirname "$BRIEF")" && pwd -P)
 BRIEF_REAL="$BRIEF_DIR_REAL/$(basename "$BRIEF")"
+if [ -n "$CONTEXT_PACK" ]; then
+  [ -f "$CONTEXT_PACK" ] || {
+    echo "error: Context Broker pack is missing or not a regular file: $CONTEXT_PACK" >&2
+    exit 1
+  }
+  CONTEXT_PACK_DIR=$(cd "$(dirname "$CONTEXT_PACK")" && pwd -P) || {
+    echo "error: Context Broker pack directory cannot be resolved: $CONTEXT_PACK" >&2
+    exit 1
+  }
+  CONTEXT_PACK="$CONTEXT_PACK_DIR/$(basename "$CONTEXT_PACK")"
+fi
 
 # PROJ_ABS can still carry a symlinked path component (e.g. macOS's /tmp ->
 # /private/tmp) when it came from the ship/scout branch's logical `pwd` above.
@@ -3815,7 +3845,7 @@ SPAWN_META_PATH=$SPAWN_META_TMP
 preserve_relaunch_meta() {
   awk -F= '
     BEGIN {
-      split("window endpoint_task_id worktree project base_sha target_branch harness kind mode yolo tasktmp model effort busy_gen spawn_gen traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id home projects control_relaunch_tx", keys, " ")
+      split("window endpoint_task_id worktree project base_sha target_branch harness kind mode yolo tasktmp model effort busy_gen spawn_gen traceparent backend context_pack herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id home projects control_relaunch_tx", keys, " ")
       for (i in keys) owned[keys[i]] = 1
     }
     !($1 in owned)
@@ -3835,6 +3865,7 @@ preserve_relaunch_meta() {
   echo "tasktmp=$TASK_TMP"
   echo "model=${MODEL:-default}"
   echo "effort=${EFFORT:-default}"
+  [ -z "$CONTEXT_PACK" ] || echo "context_pack=$CONTEXT_PACK"
   [ -z "$ROLE" ] || echo "role=$ROLE"
   [ -z "$DATA_CLASS" ] || echo "data_class=$DATA_CLASS"
   [ -z "$ROUTE_ID" ] || echo "route_id=$ROUTE_ID"
@@ -4077,6 +4108,11 @@ if [ "$KIND" = secondmate ]; then
   # Reuse the single frozen decision from the carrier resolution above so the
   # injected carrier and this on/off snapshot are guaranteed to agree.
   LAUNCH="FM_ROOT_OVERRIDE= FM_STATE_OVERRIDE= FM_DATA_OVERRIDE= FM_PROJECTS_OVERRIDE= FM_CONFIG_OVERRIDE= FM_PUBLIC_FOLLOWUP_PRIMARY_HOME=$sq_primary_home FM_HOME=$sq_home FM_TRACE_CONTEXT=$SPAWN_TRACE_EFFECTIVE FM_SUPERVISION_MODEL=$supervision_model $LAUNCH"
+fi
+if [ -n "$CONTEXT_PACK" ]; then
+  sq_context_pack=$(shell_quote "$CONTEXT_PACK")
+  sq_context_broker=$(shell_quote "$FM_ROOT/bin/fm-context-broker.mjs")
+  LAUNCH="FM_CONTEXT_PACK=$sq_context_pack FM_CONTEXT_BROKER=$sq_context_broker $LAUNCH"
 fi
 if [ -z "$SPAWN_TRACEPARENT" ] && [ "$RELAUNCH" -eq 1 ]; then
   LAUNCH="unset TRACEPARENT; $LAUNCH"
