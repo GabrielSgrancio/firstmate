@@ -10,6 +10,20 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { evaluateDataGate } from './fm-router-v2.mjs';
+import {
+  TASK_CLASSES as ROUTING_TASK_CLASSES,
+  STAGES as ROUTING_STAGES,
+  explorationPolicy as sharedExplorationPolicy,
+  promotionCriteria as sharedPromotionCriteria,
+  roleForTaskClass,
+  stageForStatus,
+  stageIndex,
+  routeModelName,
+  normalizeLearnedRouting,
+  ensureCapabilityRecord,
+  updateCapabilityPosterior,
+  rebuildModelFamilyPriors
+} from './fm-routing-capability.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const FM_HOME = path.resolve(process.env.FM_HOME || ROOT);
@@ -21,34 +35,8 @@ const BENCHMARK_PATH = homePath('data/routing-benchmark.json');
 const REGISTRY_PATH = homePath('config/model-registry.json');
 const POLICY_PATH = homePath('config/routing-policy.json');
 
-export const STAGES = Object.freeze([
-  'DISCOVERED',
-  'SMOKE',
-  'CHEAP_EVAL',
-  'CHALLENGER',
-  'LOW_RISK_REAL_TRAFFIC',
-  'ROUTING_ELIGIBLE'
-]);
-
-const STATUS_TO_STAGE = Object.freeze({ BENCHMARK_ONLY: 'DISCOVERED' });
-const PROMOTION_REAL_N = 15;
-const DEFAULT_PROMOTION_SUCCESS_RATE = 0.8;
-const BOOTSTRAP_EXPLORATION_RATE = 0.18;
-const STEADY_EXPLORATION_RATE = 0.05;
-const EXPLORATION_DATA_CLASSES = new Set(['PUBLIC', 'SANITIZED', 'PRIVATE_CODE']);
-
-export const TASK_CLASSES = Object.freeze({
-  targeted_edit: { role: 'fast_precise', deterministic: ['tests_pass', 'task_completed'] },
-  mechanical_tool_work: { role: 'cheap_tool_worker', deterministic: ['task_completed', 'tool_failures'] },
-  test_generation: { role: 'strong_cheap_worker', deterministic: ['tests_pass', 'regression_tests_added', 'task_completed'] },
-  refactor: { role: 'general_engineer', deterministic: ['tests_pass', 'task_completed'] },
-  multi_file_feature: { role: 'autonomous_engineer', deterministic: ['tests_pass', 'build_pass', 'task_completed'] },
-  brownfield_debugging: { role: 'deep_engineer', deterministic: ['bug_reproduced', 'regression_tests_added', 'tests_pass', 'task_completed'] },
-  large_context_repository_retrieval: { role: 'deep_context', deterministic: ['task_completed'] },
-  long_horizon_autonomous_engineering: { role: 'autonomous_engineer', deterministic: ['tests_pass', 'build_pass', 'task_completed'] },
-  architecture_reasoning: { role: 'architect_synthesizer', deterministic: [], fallback: 'llm_judge' },
-  critical_audit: { role: 'critical_auditor', deterministic: ['task_completed', 'regression_tests_added'] }
-});
+export const TASK_CLASSES = ROUTING_TASK_CLASSES;
+export const STAGES = ROUTING_STAGES;
 
 export const SIGNALS = Object.freeze([
   'tests_pass',
@@ -90,7 +78,7 @@ function appendJsonLine(filePath, value) {
 }
 
 function candidateKey(route) {
-  return route.model_family || route.raw_id || route.logical_alias || route.resolved_runtime_model;
+  return routeModelName(route);
 }
 
 function routeMatches(route, selector) {
@@ -101,16 +89,6 @@ function routeMatches(route, selector) {
     route.model_family === selector;
 }
 
-function stageForStatus(status) {
-  return STATUS_TO_STAGE[status] || status;
-}
-
-function stageIndex(stage) {
-  const index = STAGES.indexOf(stage);
-  if (index < 0) throw new Error(`Unknown lifecycle stage: ${stage}`);
-  return index;
-}
-
 function findRoute(routes, selector) {
   const matches = routes.filter((route) => routeMatches(route, selector));
   if (matches.length === 0) throw new Error(`No compiled route target matches candidate "${selector}"`);
@@ -118,12 +96,6 @@ function findRoute(routes, selector) {
     throw new Error(`Route selector "${selector}" matches multiple RouteTargets; use an explicit route_id`);
   }
   return matches[0];
-}
-
-function roleForTaskClass(taskClass) {
-  const definition = TASK_CLASSES[taskClass];
-  if (!definition) throw new Error(`Unknown task class "${taskClass}"`);
-  return definition.role;
 }
 
 function normalizeSignals(input = {}) {
@@ -162,64 +134,21 @@ function deterministicEvidence(taskClass, signals) {
 }
 
 function promotionCriteria(policy = {}) {
-  const configured = policy.champion_challenger_strategy?.promotion_criteria || {};
-  const minRealN = Number.isInteger(configured.min_real_n) && configured.min_real_n > 0
-    ? configured.min_real_n : PROMOTION_REAL_N;
-  const minSuccessRate = Number.isFinite(configured.min_real_success_rate) &&
-    configured.min_real_success_rate > 0 && configured.min_real_success_rate <= 1
-    ? configured.min_real_success_rate : DEFAULT_PROMOTION_SUCCESS_RATE;
-  const minSuccessfulOutcomes = Number.isInteger(configured.min_successes) && configured.min_successes > 0
-    ? configured.min_successes : Math.ceil(minRealN * minSuccessRate);
-  return {
-    minRealN,
-    minSuccessRate,
-    minSuccessfulOutcomes,
-    configuredSuccessRateDelta: configured.min_real_success_rate_delta ?? null,
-    configuredCostReductionDelta: configured.cost_reduction_delta ?? null
-  };
+  return sharedPromotionCriteria(policy);
 }
 
-function ensureStats(learned, role, route, criteria) {
-  learned.version = learned.version || 3;
-  learned.role_statistics = learned.role_statistics || {};
-  learned.role_statistics[role] = learned.role_statistics[role] || {};
-  const routeTargetId = route.route_id;
-  const current = learned.role_statistics[role][routeTargetId] || {};
-  const priorMean = Number.isFinite(current.prior_mean) ? current.prior_mean :
-    (Number.isFinite(current.posterior_mean) ? current.posterior_mean : 0.5);
-  const priorEffectiveN = Number.isFinite(current.prior_effective_n) ? current.prior_effective_n : 0;
-  const realN = Number.isFinite(current.real_n) ? current.real_n : 0;
-  const realSuccesses = Number.isFinite(current.real_successes) ? current.real_successes : 0;
-  learned.role_statistics[role][routeTargetId] = {
-    ...current,
-    route_id: routeTargetId,
-    model: candidateKey(route),
-    harness: route.harness,
-    provider: route.provider || route.provider_path || null,
-    real_n: realN,
-    real_successes: realSuccesses,
-    deterministic_evaluations: Number.isFinite(current.deterministic_evaluations) ? current.deterministic_evaluations : 0,
-    deterministic_failures: Number.isFinite(current.deterministic_failures) ? current.deterministic_failures : 0,
-    prior_mean: priorMean,
-    prior_effective_n: priorEffectiveN,
-    posterior_mean: (priorMean * priorEffectiveN + realSuccesses) / (priorEffectiveN + realN || 1),
-    promotion_eligible_real_n: realN >= criteria.minRealN
-  };
-  return learned.role_statistics[role][routeTargetId];
-}
-
-function updatePosterior(stats, criteria) {
-  stats.posterior_mean = (stats.prior_mean * stats.prior_effective_n + stats.real_successes) /
-    (stats.prior_effective_n + stats.real_n || 1);
-  stats.promotion_eligible_real_n = stats.real_n >= criteria.minRealN;
-}
-
-function updateRoutes(routes, route, nextStage) {
-  const updated = routes.map((candidate) => {
-    if (candidate.route_id !== route.route_id) return candidate;
-    return { ...candidate, routing_status: nextStage };
+function lowRiskReason(options = {}) {
+  return sharedExplorationPolicy({
+    ...options,
+    stage: options.stage || 'CHALLENGER',
+    routeProfile: options.routeProfile || options.route?.data_profile || null,
+    resolvedRuntimeModel: options.resolvedRuntimeModel || options.route?.resolved_runtime_model || null,
+    evaluateDataGate
   });
-  return updated;
+}
+
+export function explorationPolicy(options = {}) {
+  return lowRiskReason(options);
 }
 
 function promoteRegistryVisibility(route, role) {
@@ -248,52 +177,11 @@ function promoteRegistryVisibility(route, role) {
 function loadState() {
   const routes = readJson(ROUTES_PATH, 'compiled route targets');
   if (!Array.isArray(routes)) throw new Error('compiled route targets must be an array');
-  const learned = fs.existsSync(LEARNED_PATH) ? readJson(LEARNED_PATH, 'learned routing') : { version: 3, role_statistics: {} };
+  const rawLearned = fs.existsSync(LEARNED_PATH) ? readJson(LEARNED_PATH, 'learned routing') : null;
+  const learned = normalizeLearnedRouting(rawLearned, routes);
   const benchmark = fs.existsSync(BENCHMARK_PATH) ? readJson(BENCHMARK_PATH, 'routing benchmark') : null;
   const policy = fs.existsSync(POLICY_PATH) ? readJson(POLICY_PATH, 'routing policy') : {};
   return { routes, learned, benchmark, policy };
-}
-
-function lowRiskReason({
-  dataClass = 'PUBLIC',
-  critical = false,
-  retryTolerant = false,
-  route = null,
-  routeProfile = null,
-  resolvedRuntimeModel = null
-} = {}) {
-  const reasons = [];
-  if (!EXPLORATION_DATA_CLASSES.has(dataClass)) {
-    reasons.push(`data class ${dataClass} is not eligible for automatic exploration`);
-  }
-  if (critical) reasons.push('task is marked critical');
-  if (!retryTolerant) reasons.push('task is not retry-tolerant');
-  const profile = routeProfile || route?.data_profile;
-  const model = resolvedRuntimeModel || route?.resolved_runtime_model;
-  if (!profile) {
-    reasons.push('no concrete route policy profile was supplied');
-  } else {
-    try {
-      const gate = evaluateDataGate(dataClass, profile, { resolvedRuntimeModel: model });
-      if (!gate.allowed) reasons.push(`data policy gate refused the route: ${gate.reason}`);
-    } catch (error) {
-      reasons.push(`data policy gate could not classify the route: ${error.message}`);
-    }
-  }
-  return { lowRisk: reasons.length === 0, reasons };
-}
-
-export function explorationPolicy(options = {}) {
-  const { stage, realN = 0 } = options;
-  const risk = lowRiskReason(options);
-  if (!risk.lowRisk) return { rate: 0, eligible: false, phase: 'blocked', ...risk };
-  if (['CHALLENGER', 'LOW_RISK_REAL_TRAFFIC'].includes(stage) && realN < PROMOTION_REAL_N) {
-    return { rate: BOOTSTRAP_EXPLORATION_RATE, eligible: true, phase: 'bootstrap', ...risk };
-  }
-  if (stage === 'ROUTING_ELIGIBLE' || realN >= PROMOTION_REAL_N) {
-    return { rate: STEADY_EXPLORATION_RATE, eligible: true, phase: 'steady', ...risk };
-  }
-  return { rate: 0, eligible: false, phase: 'not-challenger', ...risk };
 }
 
 export function isExplorationAssignment({ stage, realN = 0, random = Math.random(), ...risk } = {}) {
@@ -301,18 +189,27 @@ export function isExplorationAssignment({ stage, realN = 0, random = Math.random
   return { ...policy, assigned: policy.eligible && random < policy.rate };
 }
 
-function persistTransition(state, route, nextStage, details) {
-  const currentStage = stageForStatus(route.routing_status);
+function routeWithCapability(route, capability) {
+  return {
+    ...route,
+    routing_status: capability.routing_status,
+    capability_status: capability.routing_status,
+    task_class: capability.task_class
+  };
+}
+
+function persistTransition(state, route, taskClass, role, nextStage, details) {
+  const capability = ensureCapabilityRecord(state.learned, route, taskClass, role);
+  const currentStage = stageForStatus(capability.routing_status);
   if (stageIndex(nextStage) < stageIndex(currentStage)) {
     throw new Error(`Lifecycle cannot move backwards from ${currentStage} to ${nextStage}`);
   }
   if (stageIndex(nextStage) > stageIndex(currentStage) + 1) {
     throw new Error(`Lifecycle transition must advance one stage at a time (${currentStage} -> ${nextStage})`);
   }
-  const routes = updateRoutes(state.routes, route, nextStage);
-  writeJsonAtomic(ROUTES_PATH, routes);
-  state.routes = routes;
-  return routes.find((candidate) => candidate.route_id === route.route_id) || route;
+  capability.routing_status = nextStage;
+  writeJsonAtomic(LEARNED_PATH, state.learned);
+  return routeWithCapability(route, capability);
 }
 
 function recordEvidence(state, route, { stage, role, taskClass, signals = {}, outcome, details = {} }) {
@@ -350,13 +247,16 @@ export function smokeCandidate(options = {}) {
   const state = loadState();
   const route = findRoute(state.routes, options.model || options.routeId);
   const { role, taskClass } = resolveRoleAndClass(route, options);
+  const capability = ensureCapabilityRecord(state.learned, route, taskClass, role);
   const signals = normalizeSignals(options);
-  if (stageForStatus(route.routing_status) !== 'DISCOVERED') {
-    throw new Error(`SMOKE requires DISCOVERED, got ${stageForStatus(route.routing_status)}`);
+  if (stageForStatus(capability.routing_status) !== 'DISCOVERED') {
+    throw new Error(`SMOKE requires DISCOVERED, got ${stageForStatus(capability.routing_status)}`);
   }
   const passed = options.passed !== undefined ? options.passed === true : signals.task_completed === true;
-  let current = route;
-  if (passed && stageForStatus(route.routing_status) === 'DISCOVERED') current = persistTransition(state, route, 'SMOKE', {});
+  let current = routeWithCapability(route, capability);
+  if (passed && stageForStatus(capability.routing_status) === 'DISCOVERED') {
+    current = persistTransition(state, route, taskClass, role, 'SMOKE', {});
+  }
   const event = recordEvidence(state, current, { stage: 'SMOKE', role, taskClass, signals, outcome: passed ? 'pass' : 'fail' });
   return { route: current, event };
 }
@@ -365,8 +265,9 @@ export function cheapEvaluateCandidate(options = {}) {
   const state = loadState();
   const route = findRoute(state.routes, options.model || options.routeId);
   const { role, taskClass } = resolveRoleAndClass(route, options);
-  if (stageForStatus(route.routing_status) !== 'SMOKE') {
-    throw new Error(`CHEAP_EVAL requires SMOKE, got ${stageForStatus(route.routing_status)}`);
+  const capability = ensureCapabilityRecord(state.learned, route, taskClass, role);
+  if (stageForStatus(capability.routing_status) !== 'SMOKE') {
+    throw new Error(`CHEAP_EVAL requires SMOKE, got ${stageForStatus(capability.routing_status)}`);
   }
   const signals = normalizeSignals(options);
   const evidence = deterministicEvidence(taskClass, signals);
@@ -374,7 +275,9 @@ export function cheapEvaluateCandidate(options = {}) {
     const event = recordEvidence(state, route, { stage: 'CHEAP_EVAL', role, taskClass, signals, outcome: 'refused', details: { refusal: evidence } });
     return { route, event, promoted: false, refusal: evidence };
   }
-  const current = stageForStatus(route.routing_status) === 'SMOKE' ? persistTransition(state, route, 'CHEAP_EVAL', {}) : route;
+  const current = stageForStatus(capability.routing_status) === 'SMOKE'
+    ? persistTransition(state, route, taskClass, role, 'CHEAP_EVAL', {})
+    : routeWithCapability(route, capability);
   const event = recordEvidence(state, current, { stage: 'CHEAP_EVAL', role, taskClass, signals, outcome: 'pass' });
   return { route: current, event, promoted: true };
 }
@@ -383,8 +286,9 @@ export function enterChallenger(options = {}) {
   const state = loadState();
   const route = findRoute(state.routes, options.model || options.routeId);
   const { role, taskClass } = resolveRoleAndClass(route, options);
-  if (stageForStatus(route.routing_status) !== 'CHEAP_EVAL') {
-    throw new Error(`CHALLENGER requires CHEAP_EVAL, got ${stageForStatus(route.routing_status)}`);
+  const capability = ensureCapabilityRecord(state.learned, route, taskClass, role);
+  if (stageForStatus(capability.routing_status) !== 'CHEAP_EVAL') {
+    throw new Error(`CHALLENGER requires CHEAP_EVAL, got ${stageForStatus(capability.routing_status)}`);
   }
   const policy = explorationPolicy({ stage: 'CHALLENGER', route, ...options });
   if (!policy.eligible) {
@@ -398,7 +302,7 @@ export function enterChallenger(options = {}) {
     });
     return { route, event, policy, promoted: false };
   }
-  const current = persistTransition(state, route, 'CHALLENGER', {});
+  const current = persistTransition(state, route, taskClass, role, 'CHALLENGER', {});
   const event = recordEvidence(state, current, { stage: 'CHALLENGER', role, taskClass, signals: {}, outcome: 'entered' });
   return { route: current, event, policy };
 }
@@ -413,8 +317,9 @@ export function recordRealTraffic(options = {}) {
     const event = recordEvidence(state, route, { stage: 'LOW_RISK_REAL_TRAFFIC', role, taskClass, signals, outcome: 'refused', details: { refusal: risk } });
     return { route, event, promoted: false, refusal: risk };
   }
-  if (!['CHALLENGER', 'LOW_RISK_REAL_TRAFFIC'].includes(stageForStatus(route.routing_status))) {
-    throw new Error(`Real traffic requires CHALLENGER, got ${stageForStatus(route.routing_status)}`);
+  const capability = ensureCapabilityRecord(state.learned, route, taskClass, role);
+  if (!['CHALLENGER', 'LOW_RISK_REAL_TRAFFIC'].includes(stageForStatus(capability.routing_status))) {
+    throw new Error(`Real traffic requires CHALLENGER, got ${stageForStatus(capability.routing_status)}`);
   }
   const criteria = promotionCriteria(state.policy);
   const definition = TASK_CLASSES[taskClass];
@@ -423,17 +328,18 @@ export function recordRealTraffic(options = {}) {
   const success = hasDeterministicContract
     ? evidence.method === 'deterministic' && evidence.passed
     : options.success === true || signals.task_completed === true;
-  const stats = ensureStats(state.learned, role, route, criteria);
+  const stats = capability;
   stats.real_n += 1;
   if (success) stats.real_successes += 1;
   if (hasDeterministicContract) {
     if (evidence.method === 'deterministic') stats.deterministic_evaluations += 1;
     if (evidence.method !== 'deterministic' || !evidence.passed) stats.deterministic_failures += 1;
   }
-  updatePosterior(stats, criteria);
+  updateCapabilityPosterior(stats, criteria);
   writeJsonAtomic(LEARNED_PATH, state.learned);
-  const current = stageForStatus(route.routing_status) === 'CHALLENGER' ?
-    persistTransition(state, route, 'LOW_RISK_REAL_TRAFFIC', {}) : route;
+  const current = stageForStatus(capability.routing_status) === 'CHALLENGER'
+    ? persistTransition(state, route, taskClass, role, 'LOW_RISK_REAL_TRAFFIC', {})
+    : routeWithCapability(route, capability);
   let promoted = false;
   let finalRoute = current;
   const successRate = stats.real_n === 0 ? 0 : stats.real_successes / stats.real_n;
@@ -455,10 +361,12 @@ export function recordRealTraffic(options = {}) {
       deterministicEvidencePassed
   };
   if (promotionGate.passed) {
-    finalRoute = persistTransition(state, current, 'ROUTING_ELIGIBLE', {});
+    finalRoute = persistTransition(state, route, taskClass, role, 'ROUTING_ELIGIBLE', {});
     promoteRegistryVisibility(finalRoute, role);
     promoted = true;
   }
+  rebuildModelFamilyPriors(state.learned, state.routes);
+  writeJsonAtomic(LEARNED_PATH, state.learned);
   const event = recordEvidence(state, finalRoute, {
     stage: 'LOW_RISK_REAL_TRAFFIC', role, taskClass, signals,
     outcome: success ? 'pass' : 'fail',
@@ -578,10 +486,13 @@ export function status(options = {}) {
   const routes = selected ? [findRoute(state.routes, selected)] : state.routes;
   return routes.map((route) => {
     const model = candidateKey(route);
-    const roleStats = Object.entries(state.learned.role_statistics || {})
-      .map(([role, candidates]) => ({ role, stats: candidates[route.route_id] }))
-      .filter((entry) => entry.stats);
-    return { route_id: route.route_id, model, routing_status: route.routing_status, role_statistics: roleStats };
+    const capabilities = state.learned.route_capabilities?.[route.route_id]?.capabilities || {};
+    return {
+      route_id: route.route_id,
+      model,
+      routing_status: route.routing_status,
+      capabilities: Object.fromEntries(Object.entries(capabilities).map(([taskClass, stats]) => [taskClass, stats]))
+    };
   });
 }
 

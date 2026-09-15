@@ -4,6 +4,16 @@ import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { normalizeQuotaAxiSnapshot } from './fm-quota-normalize.mjs';
+import {
+  TASK_CLASSES,
+  taskClassForRole,
+  explorationPolicy,
+  capabilityEvidenceQualifies,
+  getCapabilityRecord,
+  normalizeLearnedRouting,
+  promotionCriteria,
+  familyPriorKey
+} from './fm-routing-capability.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const currentFmHome = () => path.resolve(process.env.FM_HOME || ROOT);
@@ -127,12 +137,12 @@ export function loadConfigs() {
   const quotaMap = generatedStateFresh(quotaMapPath, quotaMapRaw)
     ? quotaMapRaw
     : unknownQuotaMap(quotaMapRaw, 'quota pool map is stale');
-  const learned = fs.existsSync(learnedRoutingPath)
-    ? readJson(learnedRoutingPath, 'learned routing')
-    : null;
   const compiledRoutes = fs.existsSync(compiledRoutesPath)
     ? (generatedStateFresh(compiledRoutesPath) ? readJson(compiledRoutesPath, 'compiled route targets') : [])
     : [];
+  const learned = fs.existsSync(learnedRoutingPath)
+    ? normalizeLearnedRouting(readJson(learnedRoutingPath, 'learned routing'), compiledRoutes)
+    : normalizeLearnedRouting(null, compiledRoutes);
   return { registry, policy, priors, dataPolicy, privacyMetadata, quotaMap, learned, compiledRoutes };
 }
 
@@ -253,20 +263,6 @@ export function planContextShunting(rawTokenCount, taskComplexity) {
   };
 }
 
-// Capability index mapping canonical roles to model families / candidate slugs
-export const CAPABILITY_INDEX = {
-  fast_precise: ['gpt-5.6-luna', 'qwen3.8-flash', 'claude-haiku-4-5-20251001', 'deepseek-v4.1-flash', 'deepseek-v4-flash'],
-  cheap_tool_worker: ['qwen3.8-flash', 'deepseek-v4.1-flash', 'deepseek-v4-flash', 'gpt-5.6-luna', 'muse-spark-1.3-contributor'],
-  strong_cheap_worker: ['qwen3.7-max', 'qwen3.7-plus', 'muse-spark-1.3-contributor'],
-  general_engineer: ['gpt-5.6-terra', 'qwen3.7-max', 'claude-sonnet-5', 'claude-sonnet-4-6'],
-  fast_context: ['gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash'],
-  deep_context: ['kimi-k3', 'kimi-k2.7-code', 'gemini-3.1-pro'],
-  autonomous_engineer: ['claude-sonnet-5', 'claude-sonnet-4-6', 'gpt-5.6-terra'],
-  deep_engineer: ['gpt-5.6-sol', 'claude-opus-5', 'claude-opus-4-6-thinking', 'qwen3.8-max'],
-  architect_synthesizer: ['claude-opus-5', 'claude-opus-4-6-thinking', 'gpt-5.6-sol', 'claude-fable-5-1'],
-  critical_auditor: ['claude-opus-5', 'gpt-5.6-sol']
-};
-
 export const ROLE_DEFAULT_EFFORT = {
   critical_auditor: 'high',
   architect_synthesizer: 'high',
@@ -279,6 +275,68 @@ export const ROLE_DEFAULT_EFFORT = {
   fast_precise: 'low',
   cheap_tool_worker: 'low'
 };
+
+export function queryCapabilityCandidates({
+  role,
+  taskClass = null,
+  dataClass,
+  critical = false,
+  retryTolerant = false,
+  policy = {},
+  learned = null,
+  compiledRoutes = []
+} = {}) {
+  const selectedTaskClass = taskClass || taskClassForRole(role);
+  if (!TASK_CLASSES[selectedTaskClass]) {
+    throw new Error(`Cannot route unknown task class: "${selectedTaskClass}"`);
+  }
+  const criteria = promotionCriteria(policy);
+  const candidates = [];
+  const rejected = [];
+  for (const route of compiledRoutes) {
+    if (route.routing_status === 'BROKEN' || route.routing_status === 'MANUAL_ONLY' ||
+        route.routing_status === 'CREDIT_GATED' || route.availability === 'credit_gated') {
+      rejected.push({ route_id: route.route_id, reason: `Route catalog blocked status "${route.routing_status}"` });
+      continue;
+    }
+    const capability = getCapabilityRecord(learned, route, selectedTaskClass);
+    const capabilityStatus = capability?.routing_status || 'BENCHMARK_ONLY';
+    const realEvidence = capabilityEvidenceQualifies(capability, criteria, selectedTaskClass);
+    const explorationStage = capabilityStatus === 'ROUTING_ELIGIBLE' ? 'ROUTING_ELIGIBLE' : 'CHALLENGER';
+    const exploration = realEvidence ? {
+      rate: 0,
+      eligible: false,
+      phase: 'real-evidence',
+      lowRisk: true,
+      reasons: []
+    } : explorationPolicy({
+      stage: explorationStage,
+      realN: capability?.real_n || 0,
+      dataClass,
+      critical,
+      retryTolerant,
+      routeProfile: route.data_profile,
+      resolvedRuntimeModel: route.resolved_runtime_model,
+      evaluateDataGate
+    });
+    if (!realEvidence && !exploration.eligible) {
+      rejected.push({
+        route_id: route.route_id,
+        reason: `Capability evidence unavailable for ${selectedTaskClass}; exploration blocked: ${exploration.reasons.join('; ') || exploration.phase}`
+      });
+      continue;
+    }
+    candidates.push({
+      route,
+      capability,
+      capabilityStatus,
+      realEvidence,
+      exploration,
+      candidateBasis: realEvidence ? 'real_evidence' : 'exploration'
+    });
+  }
+  return { taskClass: selectedTaskClass, criteria, candidates, rejected };
+}
 
 export function resolveLiveQuotaPools({ quotaOverrides = null, useLiveAxi = true } = {}) {
   const { quotaMap } = loadConfigs();
@@ -455,30 +513,53 @@ export function resolveLiveQuotaPools({ quotaOverrides = null, useLiveAxi = true
   return pools;
 }
 
-export function scoreAndSelectRoute({ role, dataClass, targetEffort = null, quotaOverrides = null, allowChallengers = false, excludeRoutes = [], useLiveAxi = true }) {
+export function scoreAndSelectRoute({
+  role,
+  taskClass = null,
+  dataClass,
+  targetEffort = null,
+  critical = false,
+  retryTolerant = false,
+  quotaOverrides = null,
+  allowChallengers = false,
+  excludeRoutes = [],
+  useLiveAxi = true
+}) {
   if (!dataClass || dataClass === 'UNKNOWN') {
     throw new Error(`dataClass is required and must not be empty or UNKNOWN (fail-closed policy)`);
   }
-  const { registry, learned, compiledRoutes } = loadConfigs();
+  const { registry, policy, learned, compiledRoutes } = loadConfigs();
   if (!registry.canonical_roles.includes(role)) {
     throw new Error(`Cannot route unknown role: "${role}"`);
   }
+
+  const capabilityQuery = queryCapabilityCandidates({
+    role,
+    taskClass,
+    dataClass,
+    critical,
+    retryTolerant,
+    policy,
+    learned,
+    compiledRoutes
+  });
+  const selectedTaskClass = capabilityQuery.taskClass;
 
   const requiredEffort = targetEffort || ROLE_DEFAULT_EFFORT[role] || 'medium';
 
   // Use resolved live quota pools with optional overrides and fail-closed normalization
   const liveQuota = resolveLiveQuotaPools({ quotaOverrides, useLiveAxi });
 
-  // 1. Gather Candidate RouteTargets from Capability Index
-  const candidateFamilies = CAPABILITY_INDEX[role] || [];
-  const candidateRoutes = compiledRoutes.filter(r => {
-    return candidateFamilies.some(fam => r.resolved_runtime_model.includes(fam) || r.model_family.includes(fam));
-  });
+  // 1. Gather RouteTargets from empirical task-class evidence or WP9 exploration eligibility.
+  const candidateRoutes = capabilityQuery.candidates.map(candidate => candidate.route);
+  const candidateMetadata = new Map(capabilityQuery.candidates.map(candidate => [candidate.route.route_id, candidate]));
 
-  const rejectedRoutes = [];
+  const rejectedRoutes = [...capabilityQuery.rejected];
   const viableCandidates = [];
 
   for (const route of candidateRoutes) {
+    const metadata = candidateMetadata.get(route.route_id);
+    const capabilityStatus = metadata.capabilityStatus;
     // Stage 0: Exclude routes requested by fallback re-routing policy
     if (excludeRoutes && excludeRoutes.includes(route.route_id)) {
       rejectedRoutes.push({ route_id: route.route_id, reason: 'Excluded by fallback re-routing policy' });
@@ -486,24 +567,16 @@ export function scoreAndSelectRoute({ role, dataClass, targetEffort = null, quot
     }
 
     // Stage 1: Lifecycle & Status Enforcement
-    if (route.routing_status === 'BENCHMARK_ONLY') {
-      rejectedRoutes.push({ route_id: route.route_id, reason: 'Lifecycle Blocked: BENCHMARK_ONLY candidate cannot be auto-dispatched' });
-      continue;
-    }
-    if (route.routing_status === 'MANUAL_ONLY') {
+    if (capabilityStatus === 'MANUAL_ONLY') {
       rejectedRoutes.push({ route_id: route.route_id, reason: 'Lifecycle Blocked: MANUAL_ONLY candidate requires manual captain specification' });
       continue;
     }
-    if (route.routing_status === 'CHALLENGER' && !allowChallengers) {
+    if (capabilityStatus === 'CHALLENGER' && !allowChallengers) {
       rejectedRoutes.push({ route_id: route.route_id, reason: 'Lifecycle Blocked: CHALLENGER candidate blocked under non-exploratory policy' });
       continue;
     }
-    if (route.routing_status === 'CREDIT_GATED' || route.availability === 'credit_gated') {
+    if (capabilityStatus === 'CREDIT_GATED' || route.routing_status === 'CREDIT_GATED' || route.availability === 'credit_gated') {
       rejectedRoutes.push({ route_id: route.route_id, reason: `Unavailable / Credit Gated (${route.routing_status})` });
-      continue;
-    }
-    if (route.routing_status !== 'ROUTING_ELIGIBLE' && route.routing_status !== 'CHALLENGER') {
-      rejectedRoutes.push({ route_id: route.route_id, reason: `Lifecycle Blocked: status "${route.routing_status}" not eligible for auto-dispatch` });
       continue;
     }
 
@@ -556,7 +629,7 @@ export function scoreAndSelectRoute({ role, dataClass, targetEffort = null, quot
       continue;
     }
 
-    viableCandidates.push({ route, pool, scarcityState });
+    viableCandidates.push({ route, pool, scarcityState, metadata });
   }
 
   if (viableCandidates.length === 0) {
@@ -564,15 +637,17 @@ export function scoreAndSelectRoute({ role, dataClass, targetEffort = null, quot
   }
 
   // 2. Capacity-Aware Pareto Scoring
-  const scored = viableCandidates.map(({ route, pool, scarcityState }) => {
+  const scored = viableCandidates.map(({ route, pool, scarcityState, metadata }) => {
     // Quality Prior / Posterior
     let qualityScore = 0.90;
-    const roleStats = learned?.role_statistics?.[role];
-    if (roleStats) {
-      const stat = roleStats[route.resolved_runtime_model] || roleStats[route.model_family] || roleStats[route.logical_alias] || roleStats[route.route_id];
-      if (stat && typeof stat.posterior_mean === 'number') {
-        qualityScore = stat.posterior_mean;
-      }
+    const directStats = metadata.capability;
+    const familyPrior = familyPriorKey(route)
+      ? learned?.model_family_priors?.[familyPriorKey(route)]?.[selectedTaskClass]
+      : null;
+    if (directStats && typeof directStats.posterior_mean === 'number') {
+      qualityScore = directStats.posterior_mean;
+    } else if (familyPrior && typeof familyPrior.prior_mean === 'number') {
+      qualityScore = familyPrior.prior_mean;
     }
 
     // Generic Quota Scarcity Factor (no magic strings)
@@ -632,6 +707,10 @@ export function scoreAndSelectRoute({ role, dataClass, targetEffort = null, quot
     const finalScore = parseFloat((qualityScore + quotaBonus + effortFitScore).toFixed(4));
     return {
       route,
+      capabilityStatus: metadata.capabilityStatus,
+      candidateBasis: metadata.candidateBasis,
+      real_n: metadata.capability?.real_n || 0,
+      exploration: metadata.exploration,
       qualityScore,
       quotaBonus,
       effortFitScore,
@@ -647,6 +726,7 @@ export function scoreAndSelectRoute({ role, dataClass, targetEffort = null, quot
 
   return {
     role,
+    taskClass: selectedTaskClass,
     dataClass,
     targetEffort: requiredEffort,
     effort: winner.route.reasoning_effort,
@@ -665,6 +745,10 @@ export function scoreAndSelectRoute({ role, dataClass, targetEffort = null, quot
       route_id: s.route.route_id,
       score: s.finalScore,
       effort_fit: s.effortFitScore,
+      capability_status: s.capabilityStatus,
+      candidate_basis: s.candidateBasis,
+      real_n: s.real_n,
+      exploration: s.exploration,
       note: s.arbitrageNote
     })),
     liveQuotaPools: liveQuota,
@@ -673,7 +757,11 @@ export function scoreAndSelectRoute({ role, dataClass, targetEffort = null, quot
       harness: s.route.harness,
       model: s.route.resolved_runtime_model,
       effort: s.route.reasoning_effort,
-      score: s.finalScore
+      score: s.finalScore,
+      capability_status: s.capabilityStatus,
+      candidate_basis: s.candidateBasis,
+      real_n: s.real_n,
+      exploration: s.exploration
     }))
   };
 }
@@ -990,8 +1078,11 @@ export function ingressDispatchFailed({
 export function dispatchThroughHerdr({
   taskId,
   role = 'general_engineer',
+  taskClass = null,
   dataClass,
   targetEffort = null,
+  critical = false,
+  retryTolerant = false,
   intent = '',
   spec = '',
   scout = true,
@@ -1020,8 +1111,11 @@ export function dispatchThroughHerdr({
   }
   const decision = scoreAndSelectRoute({
     role,
+    taskClass,
     dataClass,
     targetEffort,
+    critical,
+    retryTolerant,
     excludeRoutes: effectiveExcludes,
     quotaOverrides,
     useLiveAxi
@@ -1150,8 +1244,11 @@ export function dispatchThroughHerdr({
       return dispatchThroughHerdr({
         taskId,
         role,
+        taskClass,
         dataClass,
         targetEffort,
+        critical,
+        retryTolerant,
         intent,
         spec,
         scout,

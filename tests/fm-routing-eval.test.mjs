@@ -5,6 +5,7 @@ import { makeRouterFixtureHome } from './router-v2-fixture.mjs';
 
 const home = makeRouterFixtureHome();
 const evaluator = await import('../bin/fm-routing-eval.mjs');
+const capabilityModel = await import('../bin/fm-routing-capability.mjs');
 
 assert.deepEqual(Object.keys(evaluator.TASK_CLASSES), [
   'targeted_edit',
@@ -126,8 +127,10 @@ assert.equal(refusedRisk.promoted, false);
 assert.match(refusedRisk.refusal.reasons.join(','), /not eligible for automatic exploration/);
 
 const beforeLearned = JSON.parse(fs.readFileSync(learnedPath, 'utf8'));
-const prior = beforeLearned.role_statistics.fast_precise['omen-alpha'];
-assert.equal(prior, undefined);
+const prior = beforeLearned.route_capabilities?.['opencode:omen-alpha']?.capabilities?.targeted_edit;
+assert.equal(prior.real_n, 0);
+assert.equal(prior.routing_status, 'CHALLENGER');
+assert.equal(prior.uncertainty.status, 'untested');
 for (let index = 0; index < 14; index += 1) {
   result = evaluator.recordRealTraffic({
     model: 'omen-alpha', taskClass: 'targeted_edit', dataClass: 'PUBLIC', retryTolerant: true,
@@ -161,9 +164,9 @@ assert.equal(result.promotionGate.passed, true);
 assert.equal(result.policy.rate, 0.05);
 
 const finalRoutes = JSON.parse(fs.readFileSync(routesPath, 'utf8'));
-assert.equal(finalRoutes.find((route) => route.route_id === 'opencode:omen-alpha').routing_status, 'ROUTING_ELIGIBLE');
+assert.equal(finalRoutes.find((route) => route.route_id === 'opencode:omen-alpha').routing_status, 'BENCHMARK_ONLY');
 const finalLearned = JSON.parse(fs.readFileSync(learnedPath, 'utf8'));
-const stats = finalLearned.role_statistics.fast_precise['opencode:omen-alpha'];
+const stats = finalLearned.route_capabilities['opencode:omen-alpha'].capabilities.targeted_edit;
 assert.equal(stats.real_n, 15);
 assert.equal(stats.promotion_eligible_real_n, true);
 assert.equal(stats.prior_effective_n, 0);
@@ -255,13 +258,52 @@ for (let index = 0; index < 15; index += 1) {
 }
 assert.equal(result.route.routing_status, 'ROUTING_ELIGIBLE');
 const isolatedRoutes = JSON.parse(fs.readFileSync(routesPath, 'utf8'));
-assert.equal(isolatedRoutes.find((route) => route.route_id === 'codex:shared-luna').routing_status, 'ROUTING_ELIGIBLE');
+assert.equal(isolatedRoutes.find((route) => route.route_id === 'codex:shared-luna').routing_status, 'BENCHMARK_ONLY');
 assert.equal(isolatedRoutes.find((route) => route.route_id === 'opencode:shared-luna').routing_status, 'BENCHMARK_ONLY');
 const isolatedLearned = JSON.parse(fs.readFileSync(learnedPath, 'utf8'));
-assert.equal(isolatedLearned.role_statistics.fast_precise['codex:shared-luna'].real_n, 15);
-assert.equal(isolatedLearned.role_statistics.fast_precise['opencode:shared-luna'], undefined);
+assert.equal(isolatedLearned.route_capabilities['codex:shared-luna'].capabilities.targeted_edit.real_n, 15);
+assert.equal(isolatedLearned.route_capabilities['opencode:shared-luna'], undefined);
 const isolatedStatus = evaluator.status({ routeId: 'codex:shared-luna' })[0];
-assert.equal(isolatedStatus.role_statistics[0].stats.route_id, 'codex:shared-luna');
-assert.equal(evaluator.status({ routeId: 'opencode:shared-luna' })[0].role_statistics.length, 0);
+assert.equal(isolatedStatus.capabilities.targeted_edit.route_id, 'codex:shared-luna');
+assert.equal(isolatedStatus.capabilities.targeted_edit.routing_status, 'ROUTING_ELIGIBLE');
+assert.equal(isolatedStatus.capabilities.test_generation, undefined);
+assert.equal(evaluator.status({ routeId: 'opencode:shared-luna' })[0].capabilities.targeted_edit, undefined);
+
+const familyRoutes = [
+  { route_id: 'opencode:family-alpha', model_family: 'family-alpha', harness: 'opencode' },
+  { route_id: 'otherharness:family-alpha', model_family: 'family-alpha', harness: 'otherharness' },
+  { route_id: 'opencode:deepseek-v4-flash', model_family: 'deepseek-v4-flash', harness: 'opencode' }
+];
+const familyLearned = {
+  version: 4,
+  route_capabilities: {
+    'opencode:family-alpha': {
+      route_id: 'opencode:family-alpha',
+      capabilities: { targeted_edit: { real_n: 3, real_successes: 2 } }
+    },
+    'otherharness:family-alpha': {
+      route_id: 'otherharness:family-alpha',
+      capabilities: { targeted_edit: { real_n: 5, real_successes: 4 } }
+    },
+    'opencode:deepseek-v4-flash': {
+      route_id: 'opencode:deepseek-v4-flash',
+      capabilities: { targeted_edit: { real_n: 15, real_successes: 15 } }
+    }
+  }
+};
+const familyPriors = capabilityModel.rebuildModelFamilyPriors(familyLearned, familyRoutes);
+assert.equal(familyPriors['family-alpha'].targeted_edit.source_route_count, 2);
+assert.equal(familyPriors['family-alpha'].targeted_edit.source_real_n, 8);
+assert.equal(familyPriors['family-alpha'].targeted_edit.prior_mean, 0.75);
+assert.equal(familyPriors['deepseek-v4-flash'], undefined,
+  'unresolved DeepSeek V4 aliases must not be naively aggregated');
+const futureCapability = capabilityModel.ensureCapabilityRecord(familyLearned, {
+  route_id: 'futureharness:family-alpha', model_family: 'family-alpha', harness: 'futureharness'
+}, 'targeted_edit', 'fast_precise');
+assert.equal(futureCapability.prior_mean, 0.75);
+assert.equal(futureCapability.real_n, 0);
+assert.equal(futureCapability.routing_status, 'BENCHMARK_ONLY');
+assert.equal(capabilityModel.capabilityEvidenceQualifies(null, { minRealN: 1, minSuccessfulOutcomes: 1, minSuccessRate: 0.5 }, 'targeted_edit'), false,
+  'a family prior without a route record cannot promote a new RouteTarget');
 
 console.log('Routing evaluation lifecycle, promotion gate, deterministic evidence, and exploration policy passed');

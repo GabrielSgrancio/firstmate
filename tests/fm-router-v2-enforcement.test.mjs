@@ -10,6 +10,8 @@ const {
   evaluateDataGate,
   planContextShunting,
   scoreAndSelectRoute,
+  queryCapabilityCandidates,
+  loadConfigs,
   resolveLiveQuotaPools,
   dispatchThroughHerdr
 } = router;
@@ -31,6 +33,70 @@ assert.deepEqual(validateConfigs(), { valid: true, canonicalRolesCount: 10, mode
 for (const [role, routeId] of Object.entries(expected)) {
   assert.equal(scoreAndSelectRoute({ role, dataClass: 'PUBLIC', useLiveAxi: false }).selectedRoute.route_id, routeId, role);
 }
+
+const compiledPathForCapabilities = path.join(home, 'data/provider-catalogs/compiled-route-targets.json');
+const compiledForCapabilities = JSON.parse(fs.readFileSync(compiledPathForCapabilities, 'utf8'));
+compiledForCapabilities.push({
+  route_id: 'opencode:glm-5.3-flash',
+  model_family: 'glm-5.3-flash',
+  logical_alias: 'glm-5.3-flash',
+  resolved_runtime_model: 'opencode-go/glm-5.3-flash',
+  harness: 'opencode',
+  provider_path: 'opencode_go_gateway',
+  reasoning_effort: null,
+  quota_pool: 'opencode_go',
+  expected_normalized_burn: 2,
+  data_profile: 'opencode_go',
+  routing_status: 'BENCHMARK_ONLY',
+  availability: 'available'
+});
+fs.writeFileSync(compiledPathForCapabilities, JSON.stringify(compiledForCapabilities, null, 2));
+const capabilityState = loadConfigs();
+capabilityState.learned.route_capabilities['opencode:qwen3.8-flash'].capabilities.refactor = {
+  route_id: 'opencode:qwen3.8-flash',
+  task_class: 'refactor',
+  role: 'general_engineer',
+  real_n: 0,
+  real_successes: 0,
+  prior_mean: 0.5,
+  prior_effective_n: 0,
+  posterior_mean: 0.5,
+  routing_status: 'BENCHMARK_ONLY',
+  uncertainty: { status: 'untested', real_n: 0 }
+};
+const dynamicCandidates = queryCapabilityCandidates({
+  role: 'general_engineer',
+  taskClass: 'refactor',
+  dataClass: 'PUBLIC',
+  retryTolerant: true,
+  policy: capabilityState.policy,
+  learned: capabilityState.learned,
+  compiledRoutes: capabilityState.compiledRoutes
+});
+const glmCandidate = dynamicCandidates.candidates.find(({ route }) => route.route_id === 'opencode:glm-5.3-flash');
+assert.ok(glmCandidate, 'an undiscovered OpenCode Go model must enter through exploration evidence');
+assert.equal(glmCandidate.candidateBasis, 'exploration');
+assert.equal(glmCandidate.capability, null);
+assert.equal(glmCandidate.exploration.phase, 'bootstrap');
+assert.ok(dynamicCandidates.candidates.some(({ route, capability, candidateBasis }) => route.route_id === 'opencode:qwen3.8-flash' &&
+  route.harness === 'opencode' && route.resolved_runtime_model === 'opencode-go/qwen3.8-flash' &&
+  capability.real_n === 0 && capability.uncertainty.status === 'untested' && candidateBasis === 'exploration'),
+  'an existing OpenCode Go route outside the former role list must be exploration-eligible');
+
+const taskScopedCandidates = queryCapabilityCandidates({
+  role: 'strong_cheap_worker',
+  taskClass: 'test_generation',
+  dataClass: 'PERSONAL_SENSITIVE',
+  retryTolerant: false,
+  policy: capabilityState.policy,
+  learned: capabilityState.learned,
+  compiledRoutes: capabilityState.compiledRoutes
+});
+assert.ok(!taskScopedCandidates.candidates.some(({ route }) => route.route_id === 'codex:gpt-5.6-luna:low'),
+  'targeted-edit evidence must not grant test-generation eligibility to the same route');
+assert.ok(taskScopedCandidates.rejected.some(({ route_id, reason }) =>
+  route_id === 'codex:gpt-5.6-luna:low' && reason.includes('test_generation')));
+
 assert.equal(evaluateDataGate('SECRET', 'claude_consumer').allowed, false);
 assert.throws(() => evaluateDataGate('WORK_CORPORATE', 'claude_consumer'), /Unknown data class: WORK_CORPORATE/);
 assert.equal(evaluateDataGate('PERSONAL_SENSITIVE', 'claude_consumer').allowed, true);
