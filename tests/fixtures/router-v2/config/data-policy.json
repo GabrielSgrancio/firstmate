@@ -1,14 +1,14 @@
 {
-  "version": 2,
+  "version": 3,
   "data_classes": {
-    "PUBLIC": {}, "SYNTHETIC": {}, "SANITIZED": {}, "PERSONAL_PRIVATE": {}, "SHARED_TRAMPOLIM": {},
-    "WORK_CORPORATE": {"fail_closed": true}, "SECRET": {"fail_closed": true}
+    "PUBLIC": {}, "SANITIZED": {}, "PRIVATE_CODE": {}, "PERSONAL_SENSITIVE": {},
+    "SECRET": {"fail_closed": true}
   },
   "live_route_profiles": {
-    "codex_consumer":{"allowed_data_classes":["PUBLIC","SYNTHETIC","SANITIZED"]},
-    "claude_consumer":{"allowed_data_classes":["PUBLIC","SYNTHETIC","SANITIZED","PERSONAL_PRIVATE","SHARED_TRAMPOLIM"]},
-    "gemini_consumer":{"allowed_data_classes":["PUBLIC","SYNTHETIC","SANITIZED"]},
-    "opencode_go":{"allowed_data_classes":["PUBLIC","SYNTHETIC","SANITIZED"]},
-    "opencode_go_cn":{"allowed_data_classes":["PUBLIC","SYNTHETIC","SANITIZED"]}
+    "codex_consumer":{"allowed_data_classes":["PUBLIC","SANITIZED","PRIVATE_CODE"]},
+    "claude_consumer":{"allowed_data_classes":["PUBLIC","SANITIZED","PRIVATE_CODE","PERSONAL_SENSITIVE"]},
+    "gemini_consumer":{"allowed_data_classes":["PUBLIC","SANITIZED","PRIVATE_CODE"]},
+    "opencode_go":{"allowed_data_classes":["PUBLIC","SANITIZED","PRIVATE_CODE","PERSONAL_SENSITIVE"],"per_model_privacy_required":true},
+    "opencode_go_cn":{"allowed_data_classes":["PUBLIC","SANITIZED","PRIVATE_CODE"]}
   }
 }

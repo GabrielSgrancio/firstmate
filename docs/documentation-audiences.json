@@ -401,6 +401,10 @@
       "audience": "maintainer-architecture"
     },
     {
+      "path": "docs/ROUTER_V3_WP2_DATA_POLICY_PORT.md",
+      "audience": "maintainer-architecture"
+    },
+    {
       "path": "docs/scripts.md",
       "audience": "operator-current"
     },

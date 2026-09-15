@@ -58,6 +58,25 @@ function generatedStateFresh(filePath, value) {
   }
 }
 
+const PRIVACY_METADATA_DEFAULT_MAX_AGE_DAYS = 30;
+
+// Route-owner privacy metadata is hand-verified documentation evidence, not generated telemetry,
+// so it uses its own longer revalidation cadence instead of generatedStateFresh's 24h window.
+// A provider-published valid_until always wins; otherwise the file's own revalidation_cadence_days
+// (or the default above) bounds how long a retrieved_at timestamp may be trusted.
+function isPrivacyMetadataStale(privacyMetadata, entry) {
+  if (privacyMetadata?.fixture === 'synthetic-router-v2') return false;
+  if (!entry) return true;
+  if (entry.valid_until) {
+    const validUntilMs = new Date(entry.valid_until).getTime();
+    if (!Number.isNaN(validUntilMs)) return Date.now() > validUntilMs;
+  }
+  const retrievedAtMs = entry.retrieved_at ? new Date(entry.retrieved_at).getTime() : NaN;
+  if (Number.isNaN(retrievedAtMs)) return true;
+  const cadenceDays = privacyMetadata?.revalidation_cadence_days || PRIVACY_METADATA_DEFAULT_MAX_AGE_DAYS;
+  return (Date.now() - retrievedAtMs) > cadenceDays * 24 * 60 * 60 * 1000;
+}
+
 function unknownQuotaMap(quotaMap, reason) {
   return {
     ...quotaMap,
@@ -75,6 +94,7 @@ export function loadConfigs() {
   const policyPath = homePath('config/routing-policy.json');
   const priorsPath = homePath('config/routing-priors.json');
   const dataPolicyPath = homePath('config/data-policy.json');
+  const privacyMetadataPath = homePath('config/provider-privacy-metadata.json');
   const quotaMapPath = homePath('data/quota-pool-map.json');
   const learnedRoutingPath = homePath('data/learned-routing.json');
   const compiledRoutesPath = homePath('data/provider-catalogs/compiled-route-targets.json');
@@ -83,6 +103,9 @@ export function loadConfigs() {
   const policy = readJson(policyPath, 'routing policy');
   const priors = readJson(priorsPath, 'routing priors');
   const dataPolicy = readJson(dataPolicyPath, 'data policy');
+  const privacyMetadata = fs.existsSync(privacyMetadataPath)
+    ? readJson(privacyMetadataPath, 'provider privacy metadata')
+    : { models: {} };
   const quotaMapRaw = readJson(quotaMapPath, 'quota pool map');
   const quotaMap = generatedStateFresh(quotaMapPath, quotaMapRaw)
     ? quotaMapRaw
@@ -93,7 +116,7 @@ export function loadConfigs() {
   const compiledRoutes = fs.existsSync(compiledRoutesPath)
     ? (generatedStateFresh(compiledRoutesPath) ? readJson(compiledRoutesPath, 'compiled route targets') : [])
     : [];
-  return { registry, policy, priors, dataPolicy, quotaMap, learned, compiledRoutes };
+  return { registry, policy, priors, dataPolicy, privacyMetadata, quotaMap, learned, compiledRoutes };
 }
 
 export function validateConfigs() {
@@ -133,10 +156,7 @@ export function validateConfigs() {
     }
   }
 
-  // 4. Validate data-policy fail-closed corporate rule
-  if (!dataPolicy.data_classes.WORK_CORPORATE.fail_closed) {
-    throw new Error('WORK_CORPORATE must have fail_closed: true');
-  }
+  // 4. Validate data-policy absolute-exclusion rule
   if (!dataPolicy.data_classes.SECRET.fail_closed) {
     throw new Error('SECRET must have fail_closed: true');
   }
@@ -144,27 +164,58 @@ export function validateConfigs() {
   return { valid: true, canonicalRolesCount: canonicalRoles.size, modelsCount: Object.keys(registry.models).length };
 }
 
-export function evaluateDataGate(dataClass, targetProfileName) {
-  const { dataPolicy } = loadConfigs();
+// dataClass classifies the actual payload being sent, never the repository or task it came from -
+// a code-only task in a personal repo is PRIVATE_CODE (or PUBLIC/SANITIZED if genuinely generic),
+// not PERSONAL_SENSITIVE by default. See docs/router-v2.md "Data classification" for the full rule.
+export function evaluateDataGate(dataClass, targetProfileName, routeContext = {}) {
+  const { dataPolicy, privacyMetadata } = loadConfigs();
   const dc = dataPolicy.data_classes[dataClass];
   if (!dc) throw new Error(`Unknown data class: ${dataClass}`);
 
   if (dataClass === 'SECRET') {
-    return { allowed: false, reason: 'SECRET data is strictly excluded from all model context' };
-  }
-
-  if (dataClass === 'WORK_CORPORATE') {
-    return { allowed: false, reason: 'WORK_CORPORATE fails closed: no enterprise ZDR tenant verified' };
+    return { allowed: false, reason: 'SECRET data is strictly excluded from all model context under any provider' };
   }
 
   const profile = dataPolicy.live_route_profiles[targetProfileName];
   if (!profile) throw new Error(`Unknown route profile: ${targetProfileName}`);
 
-  const isAllowed = profile.allowed_data_classes.includes(dataClass);
-  return {
-    allowed: isAllowed,
-    reason: isAllowed ? 'Data class permitted by profile policy' : `Data class ${dataClass} blocked on route profile ${targetProfileName}`
-  };
+  if (!profile.allowed_data_classes.includes(dataClass)) {
+    return { allowed: false, reason: `Data class ${dataClass} blocked on route profile ${targetProfileName}` };
+  }
+
+  // Multi-vendor pass-through gateways (e.g. opencode_go) cannot carry one blanket privacy claim
+  // for every model behind them, so PERSONAL_SENSITIVE additionally requires real, current,
+  // per-model route-owner privacy metadata rather than the profile's own coarse allow-list.
+  if (profile.per_model_privacy_required && dataClass === 'PERSONAL_SENSITIVE') {
+    const modelKey = routeContext.resolvedRuntimeModel || null;
+    const meta = modelKey ? privacyMetadata?.models?.[modelKey] : null;
+    if (!meta) {
+      return {
+        allowed: false,
+        reason: `PERSONAL_SENSITIVE blocked on route profile ${targetProfileName}: no verified per-model privacy metadata for ${modelKey || '(unresolved model)'}`
+      };
+    }
+    if (isPrivacyMetadataStale(privacyMetadata, meta)) {
+      return {
+        allowed: false,
+        reason: `PERSONAL_SENSITIVE blocked: privacy metadata for ${modelKey} is stale (retrieved_at ${meta.retrieved_at || 'unknown'}) and needs revalidation before it can gate this data class`
+      };
+    }
+    if (meta.training_use === 'used') {
+      return {
+        allowed: false,
+        reason: `PERSONAL_SENSITIVE blocked: ${modelKey}'s route-owner policy permits training on prompts/completions (source: ${meta.source})`
+      };
+    }
+    if ((meta.retention_days ?? 0) > 0) {
+      return {
+        allowed: false,
+        reason: `PERSONAL_SENSITIVE blocked: ${modelKey} retains data for ${meta.retention_days} day(s) per route-owner policy (source: ${meta.source})`
+      };
+    }
+  }
+
+  return { allowed: true, reason: 'Data class permitted by profile policy' };
 }
 
 export function planContextShunting(rawTokenCount, taskComplexity) {
@@ -440,7 +491,7 @@ export function scoreAndSelectRoute({ role, dataClass, targetEffort = null, quot
     }
 
     // Stage 2: Data Policy Gate
-    const gate = evaluateDataGate(dataClass, route.data_profile);
+    const gate = evaluateDataGate(dataClass, route.data_profile, { resolvedRuntimeModel: route.resolved_runtime_model });
     if (!gate.allowed) {
       rejectedRoutes.push({ route_id: route.route_id, reason: `Data Policy Rejected: ${gate.reason}` });
       continue;

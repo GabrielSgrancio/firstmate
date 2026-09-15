@@ -32,9 +32,40 @@ for (const [role, routeId] of Object.entries(expected)) {
   assert.equal(scoreAndSelectRoute({ role, dataClass: 'PUBLIC', useLiveAxi: false }).selectedRoute.route_id, routeId, role);
 }
 assert.equal(evaluateDataGate('SECRET', 'claude_consumer').allowed, false);
-assert.equal(evaluateDataGate('WORK_CORPORATE', 'claude_consumer').allowed, false);
-assert.equal(evaluateDataGate('PERSONAL_PRIVATE', 'claude_consumer').allowed, true);
-assert.equal(evaluateDataGate('PERSONAL_PRIVATE', 'opencode_go_cn').allowed, false);
+assert.throws(() => evaluateDataGate('WORK_CORPORATE', 'claude_consumer'), /Unknown data class: WORK_CORPORATE/);
+assert.equal(evaluateDataGate('PERSONAL_SENSITIVE', 'claude_consumer').allowed, true);
+assert.equal(evaluateDataGate('PERSONAL_SENSITIVE', 'opencode_go_cn').allowed, false);
+
+// Muse Spark: reachable for PUBLIC/SANITIZED, refused for PERSONAL_SENSITIVE per its real
+// training-enabled metadata (not a hand-written special case) - captain's explicit WP2 example.
+const museRoute = { resolvedRuntimeModel: 'opencode-go/muse-spark-1.3-contributor' };
+assert.equal(evaluateDataGate('PUBLIC', 'opencode_go', museRoute).allowed, true);
+assert.equal(evaluateDataGate('SANITIZED', 'opencode_go', museRoute).allowed, true);
+assert.equal(evaluateDataGate('PRIVATE_CODE', 'opencode_go', museRoute).allowed, true);
+const museGate = evaluateDataGate('PERSONAL_SENSITIVE', 'opencode_go', museRoute);
+assert.equal(museGate.allowed, false);
+assert.match(museGate.reason, /training on prompts\/completions/);
+
+// Grok 4.6: OpenCode's own docs give it 30-day retention (not "transient_gateway"), which alone
+// blocks PERSONAL_SENSITIVE even though training is disabled - the blanket claim this task replaces.
+const grokRoute = { resolvedRuntimeModel: 'opencode-go/grok-4.6' };
+const grokGate = evaluateDataGate('PERSONAL_SENSITIVE', 'opencode_go', grokRoute);
+assert.equal(grokGate.allowed, false);
+assert.match(grokGate.reason, /retains data for 30 day/);
+
+// A verified zero-retention, non-training-use model passes the same PERSONAL_SENSITIVE gate.
+assert.equal(evaluateDataGate('PERSONAL_SENSITIVE', 'opencode_go', { resolvedRuntimeModel: 'opencode-go/qwen3.7-max' }).allowed, true);
+
+// Missing per-model metadata fails closed rather than defaulting to allowed.
+const unverifiedGate = evaluateDataGate('PERSONAL_SENSITIVE', 'opencode_go', { resolvedRuntimeModel: 'opencode-go/unverified-model' });
+assert.equal(unverifiedGate.allowed, false);
+assert.match(unverifiedGate.reason, /no verified per-model privacy metadata/);
+
+// Full pipeline: PERSONAL_SENSITIVE for strong_cheap_worker skips muse-spark (training-enabled)
+// and still lands on qwen3.7-max (verified zero-retention, no training).
+const strongPersonalSensitive = scoreAndSelectRoute({ role: 'strong_cheap_worker', dataClass: 'PERSONAL_SENSITIVE', useLiveAxi: false });
+assert.equal(strongPersonalSensitive.selectedRoute.route_id, 'opencode:qwen3.7-max');
+assert.ok(strongPersonalSensitive.rejectedRoutes.some(r => r.route_id === 'opencode:muse-spark' && /training on prompts\/completions/.test(r.reason)));
 assert.equal(planContextShunting(12000, 'low').shuntingRequired, false);
 assert.equal(planContextShunting(180000, 'high').bulkReaderRole, 'fast_context');
 

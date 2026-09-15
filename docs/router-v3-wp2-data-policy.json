@@ -1,0 +1,111 @@
+{
+  "version": 3,
+  "last_updated": "2026-09-15T00:15:56Z",
+  "description": "FirstMate Data Privacy & Classification Policy V3. Five payload-based classes; SECRET is the only absolute exclusion; opencode_go gates PERSONAL_SENSITIVE per concrete model via config/provider-privacy-metadata.json instead of one blanket profile claim.",
+  "data_classes": {
+    "PUBLIC": {
+      "description": "Open source code, public documentation, published packages, public web content.",
+      "sensitivity": "none",
+      "allowed_routes": ["all"]
+    },
+    "SANITIZED": {
+      "description": "De-identified logs, scrubbed snippets with no PII, tokens, keys, or personal identifying traits.",
+      "sensitivity": "low",
+      "allowed_routes": ["all"]
+    },
+    "PRIVATE_CODE": {
+      "description": "Unpublished or proprietary source code and technical content with no personal-sensitive payload - e.g. a Gabriel OS code-only task. Classify by the actual payload, not by the repository it lives in: living in a personal repo does not by itself make a payload PERSONAL_SENSITIVE.",
+      "sensitivity": "low-medium",
+      "allowed_routes": ["all"]
+    },
+    "PERSONAL_SENSITIVE": {
+      "description": "Personal journals, daily habits, personal finances, personal memory (Gabriel OS atomic facts), unshared thoughts, and other genuinely personal-sensitive payloads. Supersedes v2's PERSONAL_PRIVATE and SHARED_TRAMPOLIM, both folded here as a conservative simplification (see docs/router-v3-wp2-data-policy-port.md).",
+      "sensitivity": "high",
+      "requires_disallow_training": true,
+      "requires_max_30d_retention": true,
+      "commercial_zdr_required": false,
+      "default_blocked_routes": ["training_enabled", "jurisdiction_cn"],
+      "allowed_routes": ["claude_consumer", "codex_consumer", "opencode_go"],
+      "note": "opencode_go allows this class structurally, but each concrete model additionally requires verified per-model privacy metadata (config/provider-privacy-metadata.json) confirming no training use and zero retention; a missing or stale entry fails closed."
+    },
+    "SECRET": {
+      "description": "API keys, private SSH keys, master passwords, OAuth refresh tokens, credentials, seed phrases.",
+      "sensitivity": "maximum",
+      "fail_closed": true,
+      "hard_blocked_routes": ["all_external_models"],
+      "note": "Secrets must never be sent to any LLM prompt, context window, or external API, under any provider. This is the only absolute exclusion left in the policy."
+    }
+  },
+  "live_route_profiles": {
+    "claude_consumer": {
+      "harness": "claude",
+      "provider": "anthropic",
+      "jurisdiction": "US",
+      "training_setting": "opt_out_available",
+      "retention": "30_days",
+      "commercial_zdr": false,
+      "telemetry_setting": "opt_in_required",
+      "source": "claude_pro_subscription (gabrielsgrancio@outlook.com)",
+      "verified_at": "2026-09-12T16:15:30Z",
+      "allowed_data_classes": ["PUBLIC", "SANITIZED", "PRIVATE_CODE", "PERSONAL_SENSITIVE"]
+    },
+    "codex_consumer": {
+      "harness": "codex",
+      "provider": "openai",
+      "jurisdiction": "US",
+      "training_setting": "opt_out_available",
+      "retention": "30_days",
+      "commercial_zdr": false,
+      "telemetry_setting": "diagnostic",
+      "source": "chatgpt_plus_subscription (biel.sgrancio@hotmail.com)",
+      "verified_at": "2026-09-12T15:32:00Z",
+      "allowed_data_classes": ["PUBLIC", "SANITIZED", "PRIVATE_CODE", "PERSONAL_SENSITIVE"]
+    },
+    "gemini_consumer": {
+      "harness": "antigravity",
+      "provider": "google",
+      "jurisdiction": "US",
+      "training_setting": "workspace_opt_out",
+      "retention": "standard_workspace_retention",
+      "commercial_zdr": false,
+      "telemetry_setting": "standard",
+      "source": "google_ai_pro_subscription",
+      "verified_at": "2026-09-12T15:32:00Z",
+      "allowed_data_classes": ["PUBLIC", "SANITIZED", "PRIVATE_CODE"]
+    },
+    "opencode_go": {
+      "harness": "opencode",
+      "provider": "opencode-go",
+      "jurisdiction": "US",
+      "commercial_zdr": false,
+      "telemetry_setting": "minimal",
+      "source": "opencode_go_subscription",
+      "verified_at": "2026-09-15T00:15:56Z",
+      "per_model_privacy_required": true,
+      "note": "This gateway proxies many unrelated vendors (OpenAI, xAI, Zhipu, Moonshot, Meta, Alibaba, DeepSeek, and others). The v2 blanket claim (\"vendor_disallow_on_proxy\" / \"transient_gateway\") was measurably wrong for Grok 4.6, GPT-5.6 Luna (30-day retention), and Muse Spark models (training-enabled). PERSONAL_SENSITIVE now requires a passing per-model check against config/provider-privacy-metadata.json; see docs/router-v3-wp2-data-policy-port.md for the live re-fetched evidence.",
+      "allowed_data_classes": ["PUBLIC", "SANITIZED", "PRIVATE_CODE", "PERSONAL_SENSITIVE"]
+    },
+    "opencode_go_cn": {
+      "harness": "opencode",
+      "provider": "opencode-go",
+      "jurisdiction": "CN",
+      "training_setting": "possible_on_vendor_side",
+      "retention": "vendor_retention_policy",
+      "commercial_zdr": false,
+      "telemetry_setting": "unverified",
+      "source": "opencode_go_models",
+      "verified_at": "2026-09-12T16:16:15Z",
+      "models": ["deepseek-v4.1-flash", "kimi-k3", "kimi-k2.7-code", "glm-5.3"],
+      "allowed_data_classes": ["PUBLIC", "SANITIZED", "PRIVATE_CODE"],
+      "hard_blocked_data_classes": ["PERSONAL_SENSITIVE", "SECRET"]
+    }
+  },
+  "rules": [
+    "Privacy constraints always outrank model capability, latency, and spare quota.",
+    "SECRET is strictly stripped and excluded from all model context under any provider - the only absolute exclusion.",
+    "Classify the actual payload, not the repository or task it came from - a personal repo does not make a code-only payload PERSONAL_SENSITIVE by default; use PRIVATE_CODE.",
+    "PERSONAL_SENSITIVE is allowed on claude_consumer, codex_consumer, and (per-model-gated) opencode_go under training opt-out / verified zero-retention.",
+    "opencode_go's PERSONAL_SENSITIVE allowance requires a fresh, passing per-model entry in config/provider-privacy-metadata.json; missing or stale metadata fails closed.",
+    "China-hosted models (opencode_go_cn) are hard-blocked on PERSONAL_SENSITIVE and SECRET."
+  ]
+}
