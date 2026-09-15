@@ -51,6 +51,17 @@ assert.equal(bootstrapped.topCandidates[0].quality_source, 'seed_prior');
 console.log(`seed-prior bootstrap selected ${bootstrapped.selectedRoute.route_id} score=${bootstrapped.finalScore.toFixed(4)}`);
 
 assert.throws(() => route({ critical: true }), /critical tasks require real capability evidence/);
+
+// Antigravity Gemini slugs carry their effort tier, and still match the model's prior.
+writePriors({
+  'gemini-3.8-flash': { harness: 'antigravity', prior_mean: 0.92, prior_effective_n: 30, recommended_roles: ['fast_context'] }
+});
+const agySelection = route({ role: 'fast_context', dataClass: 'PUBLIC' });
+assert.match(agySelection.selectedRoute.route_id, /^agy:gemini-3\.8-flash-(low|medium)$/);
+assert.ok(agySelection.allCandidates.every((candidate) => candidate.candidate_basis === 'seed_prior'));
+writePriors({
+  'gpt-5.6-terra': { harness: 'codex', prior_mean: 0.93, prior_effective_n: 40, recommended_roles: ['general_engineer'] }
+});
 assert.throws(() => route({ dataClass: 'SECRET' }), /No viable RouteTargets|SECRET/);
 
 // Dispatch-time catalog freshness regenerates a stale catalog once.

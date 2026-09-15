@@ -613,6 +613,8 @@ function priorForRoute(route, priors) {
   const candidates = [
     route?.resolved_runtime_model,
     route?.resolved_runtime_model?.replace(/^opencode-go\//, ''),
+    // Antigravity Gemini slugs carry the effort tier (gemini-3.8-flash-low).
+    route?.harness === 'antigravity' ? route?.resolved_runtime_model?.replace(/-(low|medium|high)$/, '') : null,
     route?.model_family,
     route?.logical_alias
   ].filter(Boolean);
