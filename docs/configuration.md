@@ -435,8 +435,9 @@ Secondmate homes inherit this file from the primary, so a secondmate's own crewm
 `config/router-authority` is an optional local, gitignored file holding `enforced` or `advisory`.
 Absent, a home that carries `config/model-registry.json` (a Router V3 home) is `enforced`, and any other home is `advisory`.
 `advisory` keeps legacy crewmate and scout spawns and records them as `legacy_manual` dispatches.
-`enforced` makes Router V3 the normal dispatch path: `fm-spawn.sh` refuses a fresh crewmate or scout spawn unless it carries a router selection already recorded in `data/routing-executions.jsonl` for the same task, execution, route, and harness, or an explicit `--manual-override "<reason>"` with `--data-class`.
-A manual override is recorded as `decision_type=manual_override` with its reason, and the chosen harness and model must still pass the data policy.
+`enforced` makes Router V3 the normal dispatch path: `fm-spawn.sh` refuses a fresh crewmate or scout spawn unless it carries a router selection already recorded in `data/routing-executions.jsonl` for the same task, execution, route, harness, model, data class, and effort, or an explicit `--manual-override "<reason>"` with `--data-class`.
+A manual override is recorded as `decision_type=manual_override` with its reason; in every authority mode the chosen harness and model must name a catalogued subscription route that is not credit-gated, and with `--data-class` they must still pass the data policy.
+`fm-spawn.sh` refuses `--data-class SECRET` and any class outside the five-class taxonomy for every spawn.
 Relaunches of existing tasks and secondmate spawns are not new task dispatches; they are recorded as `recovery_relaunch` or `system_internal_relaunch`.
 Any other value refuses every spawn until corrected.
 While enforced, `config/crew-dispatch.json` rules apply only to a manual override's harness choice.

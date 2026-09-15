@@ -24,7 +24,9 @@ Oversized and multi-file inputs are deterministically reduced first, then may be
 
 The context worker is checked with `evaluateDataGate` for the actual payload data class before any worker callback receives source content.
 
-Each non-secret request emits a versioned `ContextPack` under the private `state/context-cache/` directory with source hashes, repository state, relevant files and ranges, findings, commands, unresolved questions, and token telemetry.
+The broker validates the exact five-class taxonomy before reading any source and refuses a `SECRET` or unknown class as a whole operation: no pack, query echo, cache entry, targeted slice, or artifact write is produced.
+
+Each request emits a versioned `ContextPack` under the private `state/context-cache/` directory with source hashes, repository state, relevant files and ranges, findings, commands, unresolved questions, and token telemetry.
 
 The cache key includes repository state, relevant source hashes, query, operation, and data-policy scope, so changing relevant input cannot reuse stale evidence.
 
@@ -33,6 +35,20 @@ The cache key includes repository state, relevant source hashes, query, operatio
 Premium workers can use the broker's targeted-slice operation to retrieve exact lines after validating the pack's source hash.
 
 Generated boilerplate may be written directly to a repository artifact with the broker, leaving the premium worker the artifact path, hash, diff stat, and validation result.
+
+Current limits: Router dispatch builds one pack at dispatch and hands it to the worker, and the launch brief asks the worker to route bulk reads through the broker.
+Nothing intercepts a worker's later tool reads, grep, test, build, or log output mid-task, so that use is instructed rather than enforced.
+No production context-worker provider adapter exists yet: Router dispatch and the broker CLI construct the broker without `shuntWorker`, so a shunt-class request falls back to compact deterministic evidence (`fallback_to_direct_reasoner: true`) and counts no worker tokens as spent.
+The shunt-worker callbacks in `tests/fm-context-broker.test.mjs` are fixtures, so their token-saving figures are lexical fixture measurements, not billed provider work.
+
+## Task continuation
+
+`bin/fm-task-state.mjs` owns the WP8 `TaskStateCapsule` stored at `data/<task>/task-state.json`.
+When a dispatch launch fails, `dispatchThroughHerdr` classifies the failure (an explicit classification reported by the spawn runner, otherwise quota or data-policy wording, otherwise `HARD_RUNTIME_FAILURE`), creates or updates the capsule with the failed route, prior diff, modified files, and refuted hypotheses, and selects the retry through `selectContinuationRoute`, so the failure class can change the role, task class, and pool rather than only excluding the failed route.
+The retry writes `data/<task>/continuation.md`, and `fm-spawn.sh` carries it in the launch brief as the worker's continuation state.
+`saveTaskStateCapsule` refuses a `SECRET` capsule outright and redacts values under credential-shaped keys in any other class.
+Current limits: only launch failures observed by Router dispatch feed a capsule; a worker that fails after launching, or a `fm-control.sh relaunch`, does not yet create one.
+`tests/fm-router-v3-task-state.test.mjs` and `tests/fm-router-ingress.test.mjs` pin this path, the latter through a real `fm-spawn.sh` launch.
 
 Compiled catalogs and quota maps older than 24 hours are treated as stale, and missing or stale RouteTargets fail closed by producing no viable route rather than assuming abundance.
 
@@ -57,10 +73,12 @@ Dispatch requires intake-provisioned task and brief state, invokes the existing 
 [`docs/configuration.md`](configuration.md) "Router dispatch authority" owns when `fm-spawn.sh` enforces it and how the audited manual override behaves.
 Before selecting, dispatch regenerates a missing or stale compiled catalog once through `bin/fm-provider-discovery.mjs refresh` and refuses if the catalog is still not fresh; `node bin/fm-router-v2.mjs catalog-refresh-if-stale` runs the same check by hand.
 A provider refresh that falls back to a snapshot older than 24 hours publishes that provider's routes as `stale_catalog`, so Stage A refuses them instead of reading the fresh file time as fresh evidence.
-`verifyRouterProvenance` and `evaluateManualOverrideDataGate` are the checks `fm-spawn.sh` calls through the `verify-provenance` and `override-gate` subcommands.
+`verifyRouterProvenance`, `evaluateManualOverrideSpendGate`, and `evaluateManualOverrideDataGate` are the checks `fm-spawn.sh` calls through the `verify-provenance`, `override-spend-gate`, and `override-gate` subcommands.
+Provenance binds the recorded data class and effort as well as the task, execution, route, harness, and model, and refuses `SECRET` even with a matching record.
+The spend gate admits only a catalogued route in one of the five subscription pools that is not credit-gated; an uncatalogued model, a model catalogued in any other pool, a harness with no subscription route, and a custom command are refused.
 
 A task without qualifying real capability evidence normally needs retry-tolerant exploration.
-`seedPriorAdmission` also admits a non-critical task onto a catalog `ROUTING_ELIGIBLE` route whose `config/routing-priors.json` entry names the same harness and lists the requested role in `recommended_roles`.
+`seedPriorAdmission` also admits a non-critical task onto a catalog `ROUTING_ELIGIBLE` route whose `config/routing-priors.json` entry names the route's harness (a prior without a `harness` is not admitted) and lists the requested role in `recommended_roles`.
 Stage B still applies the task-class quality floor to that prior, Stage C records `candidate_basis: seed_prior`, and a task marked critical still requires real evidence.
 `tests/fm-router-v3-single-authority.test.mjs` pins these guarantees, and `tests/fm-router-ingress.test.mjs` exercises enforcement through real `fm-spawn.sh` launches.
 
