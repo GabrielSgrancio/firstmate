@@ -87,9 +87,22 @@ export const SECRET_PATTERNS = [
   /(?<=(?:password|secret|token|api_key|auth_token)\s*[:=]\s*["']?)[^"'\s\n]{8,}/gi
 ];
 
+// Object keys whose value is a credential whatever its shape, compared after
+// lowercasing and dropping separators (api_key, apiKey, API-KEY -> apikey).
+const SENSITIVE_KEY_EXACT = new Set(['token', 'secret', 'password', 'passwd', 'passphrase', 'credential', 'credentials',
+  'authorization', 'cookie', 'setcookie']);
+const SENSITIVE_KEY_SUFFIXES = ['apikey', 'password', 'passwd', 'secret', 'secretkey', 'privatekey', 'accesskey',
+  'accesstoken', 'refreshtoken', 'authtoken', 'bearertoken', 'sessiontoken', 'idtoken', 'clientsecret', 'credentials'];
+
+export function isSensitiveKey(key) {
+  const normalized = String(key).toLowerCase().replace(/[^a-z0-9]/g, '');
+  return SENSITIVE_KEY_EXACT.has(normalized) || SENSITIVE_KEY_SUFFIXES.some((suffix) => normalized.endsWith(suffix));
+}
+
 /**
  * Recursively scrub secret tokens and credentials from capsule data.
- * Pure function: operates on strings, arrays, objects.
+ * Pure function: operates on strings, arrays, objects.  A value stored under a
+ * credential-shaped key is redacted whole, whatever its type.
  */
 export function scrubSecrets(value) {
   if (typeof value === 'string') {
@@ -105,7 +118,7 @@ export function scrubSecrets(value) {
   if (value !== null && typeof value === 'object') {
     const scrubbedObj = {};
     for (const [k, v] of Object.entries(value)) {
-      scrubbedObj[k] = scrubSecrets(v);
+      scrubbedObj[k] = isSensitiveKey(k) && v !== null && v !== undefined && v !== '' ? '[REDACTED_SECRET]' : scrubSecrets(v);
     }
     return scrubbedObj;
   }
@@ -307,23 +320,18 @@ export function atomicWriteJson(filePath, data, mode = 0o600) {
 
 /**
  * Saves a TaskStateCapsule with secret scrubbing, schema validation, and atomic write.
+ * A SECRET capsule is refused outright: SECRET data never enters model context,
+ * so there is no continuation state to persist for it.
  */
 export function saveTaskStateCapsule(taskId, capsule, { fmHome = currentFmHome(), destinationPath = null } = {}) {
   validateTaskStateCapsule(capsule);
+  if (capsule.data_class === 'SECRET') {
+    throw new Error(`TaskStateCapsule for task "${taskId}" is SECRET; SECRET data is strictly excluded from model context and is never persisted`);
+  }
 
-  // Defense-in-depth secret scrub
+  // Defense-in-depth secret scrub, for credentials inside any other data class
   const scrubbed = scrubSecrets(capsule);
   scrubbed.timestamps.updated_at = new Date().toISOString();
-
-  // Defense-in-depth: If dataClass is SECRET, sanitize diff & commands completely
-  if (scrubbed.data_class === 'SECRET') {
-    scrubbed.current_diff = '[REDACTED_SECRET_POLICY_PAYLOAD]';
-    scrubbed.commands_executed = scrubbed.commands_executed.map(c => ({
-      ...c,
-      stdout_snippet: '[REDACTED_SECRET_POLICY_PAYLOAD]',
-      stderr_snippet: '[REDACTED_SECRET_POLICY_PAYLOAD]'
-    }));
-  }
 
   const targetPath = destinationPath || getTaskCapsulePath(taskId, { fmHome });
   atomicWriteJson(targetPath, scrubbed, 0o600);

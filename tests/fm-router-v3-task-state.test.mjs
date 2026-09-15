@@ -158,18 +158,40 @@ assert.ok(!scrubbed.commands[0].command.includes('AIzaSy'), 'Google API key must
 assert.ok(!scrubbed.private_key.includes('MIIEow'), 'Private key block must be scrubbed');
 assert.ok(!scrubbed.nested.password_assignment.includes('supersecretpassword123'), 'Password assignment must be scrubbed');
 
-// Defense-in-depth: If data_class is SECRET, diff & command payloads are neutralized
+// Structured credentials are redacted by key, whatever the value's shape.
+const structured = scrubSecrets({
+  api_key: 'SYNTHETIC_CREDENTIAL_123456',
+  password: 'SYNTHETIC_PASSWORD_123456',
+  nested: { clientSecret: 'SYNTHETIC_CLIENT_SECRET', 'X-Access-Token': 'short', refresh_token: { value: 'SYNTHETIC_REFRESH' } },
+  headers: [{ authorization: 'SYNTHETIC_AUTH_HEADER' }],
+  token_savings: 42,
+  max_tokens: 1000
+});
+assert.equal(JSON.stringify(structured).includes('SYNTHETIC'), false, 'credential-shaped keys must be redacted');
+assert.equal(structured.nested['X-Access-Token'], '[REDACTED_SECRET]');
+assert.equal(structured.token_savings, 42, 'non-credential keys that mention tokens are left alone');
+assert.equal(structured.max_tokens, 1000);
+const credentialCapsule = createTaskStateCapsule({
+  logical_task_id: 'task-structured-credential',
+  objective: 'Rotate a fixture integration',
+  data_class: 'PRIVATE_CODE',
+  evidence_refs: [{ source: 'config', api_key: 'SYNTHETIC_CREDENTIAL_123456' }]
+});
+saveTaskStateCapsule('task-structured-credential', credentialCapsule, { fmHome: home });
+const credentialPath = getTaskCapsulePath('task-structured-credential', { fmHome: home });
+assert.equal(fs.readFileSync(credentialPath, 'utf8').includes('SYNTHETIC_CREDENTIAL'), false);
+
+// A SECRET capsule is refused outright; nothing reaches disk.
 const secretTaskCapsule = createTaskStateCapsule({
   logical_task_id: 'task-secret-002',
-  objective: 'Secret internal token rotation',
+  objective: 'CLASSIFIED_OBJECTIVE_MUST_NOT_PERSIST',
   data_class: 'SECRET',
+  evidence_refs: [{ text: 'CLASSIFIED_EVIDENCE_MUST_NOT_PERSIST' }],
   current_diff: '+ some secret algorithm code',
-  commands_executed: [{ command: 'run secret', exit_code: 0, stdout_snippet: 'classified stdout' }]
+  commands_executed: [{ command: 'echo CLASSIFIED_COMMAND_MUST_NOT_PERSIST', exit_code: 0, stdout_snippet: 'classified stdout' }]
 });
-
-const savedSecretCapsule = saveTaskStateCapsule('task-secret-002', secretTaskCapsule, { fmHome: home });
-assert.equal(savedSecretCapsule.current_diff, '[REDACTED_SECRET_POLICY_PAYLOAD]');
-assert.equal(savedSecretCapsule.commands_executed[0].stdout_snippet, '[REDACTED_SECRET_POLICY_PAYLOAD]');
+assert.throws(() => saveTaskStateCapsule('task-secret-002', secretTaskCapsule, { fmHome: home }), /SECRET .*never persisted/);
+assert.equal(fs.existsSync(getTaskCapsulePath('task-secret-002', { fmHome: home })), false, 'a SECRET capsule never reaches disk');
 
 console.log('✓ Test 2 passed: secret scrubbing and defense-in-depth verified');
 
