@@ -33,7 +33,77 @@ routes.push({
   data_profile: 'opencode_go',
   quota_pool: 'opencode_go'
 });
+for (const route of [
+  {
+    route_id: 'opencode:omen-zero',
+    model_family: 'omen-zero',
+    logical_alias: 'omen-zero',
+    resolved_runtime_model: 'opencode-go/omen-zero',
+    harness: 'opencode',
+    routing_status: 'BENCHMARK_ONLY',
+    availability: 'available',
+    data_profile: 'opencode_go',
+    quota_pool: 'opencode_go'
+  },
+  {
+    route_id: 'opencode:omen-one',
+    model_family: 'omen-one',
+    logical_alias: 'omen-one',
+    resolved_runtime_model: 'opencode-go/omen-one',
+    harness: 'opencode',
+    routing_status: 'BENCHMARK_ONLY',
+    availability: 'available',
+    data_profile: 'opencode_go',
+    quota_pool: 'opencode_go'
+  },
+  {
+    route_id: 'opencode:omen-conflict',
+    model_family: 'omen-conflict',
+    logical_alias: 'omen-conflict',
+    resolved_runtime_model: 'opencode-go/omen-conflict',
+    harness: 'opencode',
+    routing_status: 'BENCHMARK_ONLY',
+    availability: 'available',
+    data_profile: 'opencode_go',
+    quota_pool: 'opencode_go'
+  },
+  {
+    route_id: 'codex:shared-luna',
+    model_family: 'shared-luna',
+    logical_alias: 'shared-luna-codex',
+    resolved_runtime_model: 'shared-luna-codex',
+    harness: 'codex',
+    routing_status: 'BENCHMARK_ONLY',
+    availability: 'available',
+    data_profile: 'codex_consumer',
+    quota_pool: 'codex_plus'
+  },
+  {
+    route_id: 'opencode:shared-luna',
+    model_family: 'shared-luna',
+    logical_alias: 'shared-luna-opencode',
+    resolved_runtime_model: 'opencode-go/shared-luna',
+    harness: 'opencode',
+    routing_status: 'BENCHMARK_ONLY',
+    availability: 'available',
+    data_profile: 'opencode_go',
+    quota_pool: 'opencode_go'
+  }
+]) routes.push(route);
 fs.writeFileSync(routesPath, JSON.stringify(routes, null, 2));
+
+function prepareChallenger(routeId) {
+  let current = evaluator.smokeCandidate({ routeId, taskClass: 'targeted_edit', task_completed: true });
+  current = evaluator.cheapEvaluateCandidate({
+    routeId,
+    taskClass: 'targeted_edit',
+    tests_pass: true,
+    task_completed: true
+  });
+  current = evaluator.enterChallenger({ routeId, taskClass: 'targeted_edit', dataClass: 'PUBLIC', retryTolerant: true });
+  assert.equal(current.policy.rate, 0.18);
+  return current;
+}
 
 let result = evaluator.smokeCandidate({ model: 'omen-alpha', taskClass: 'targeted_edit', task_completed: true });
 assert.equal(result.route.routing_status, 'SMOKE');
@@ -49,11 +119,11 @@ assert.equal(result.route.routing_status, 'CHALLENGER');
 assert.equal(result.policy.rate, 0.18);
 
 const refusedRisk = evaluator.recordRealTraffic({
-  model: 'omen-alpha', taskClass: 'targeted_edit', dataClass: 'WORK_CORPORATE', retryTolerant: true,
+  model: 'omen-alpha', taskClass: 'targeted_edit', dataClass: 'PERSONAL_SENSITIVE', retryTolerant: true,
   success: true
 });
 assert.equal(refusedRisk.promoted, false);
-assert.match(refusedRisk.refusal.reasons.join(','), /PUBLIC/);
+assert.match(refusedRisk.refusal.reasons.join(','), /not eligible for automatic exploration/);
 
 const beforeLearned = JSON.parse(fs.readFileSync(learnedPath, 'utf8'));
 const prior = beforeLearned.role_statistics.fast_precise['omen-alpha'];
@@ -67,7 +137,12 @@ for (let index = 0; index < 14; index += 1) {
 assert.equal(result.route.routing_status, 'LOW_RISK_REAL_TRAFFIC');
 assert.equal(result.stats.real_n, 14);
 assert.equal(result.promoted, false);
-assert.deepEqual(result.promotionGate, { required_real_n: 15, real_n: 14, passed: false });
+assert.equal(result.promotionGate.required_real_n, 15);
+assert.equal(result.promotionGate.real_n, 14);
+assert.equal(result.promotionGate.real_successes, 14);
+assert.equal(result.promotionGate.minimum_success_rate, 0.8);
+assert.equal(result.promotionGate.deterministic_evidence_passed, true);
+assert.equal(result.promotionGate.passed, false);
 assert.equal(result.policy.rate, 0.18);
 
 result = evaluator.recordRealTraffic({
@@ -78,16 +153,21 @@ assert.equal(result.stats.real_n, 15);
 assert.equal(result.stats.real_successes, 15);
 assert.equal(result.route.routing_status, 'ROUTING_ELIGIBLE');
 assert.equal(result.promoted, true);
-assert.deepEqual(result.promotionGate, { required_real_n: 15, real_n: 15, passed: true });
+assert.equal(result.promotionGate.required_real_n, 15);
+assert.equal(result.promotionGate.minimum_successful_outcomes, 12);
+assert.equal(result.promotionGate.success_rate, 1);
+assert.equal(result.promotionGate.deterministic_evidence_passed, true);
+assert.equal(result.promotionGate.passed, true);
 assert.equal(result.policy.rate, 0.05);
 
 const finalRoutes = JSON.parse(fs.readFileSync(routesPath, 'utf8'));
 assert.equal(finalRoutes.find((route) => route.route_id === 'opencode:omen-alpha').routing_status, 'ROUTING_ELIGIBLE');
 const finalLearned = JSON.parse(fs.readFileSync(learnedPath, 'utf8'));
-const stats = finalLearned.role_statistics.fast_precise['omen-alpha'];
+const stats = finalLearned.role_statistics.fast_precise['opencode:omen-alpha'];
 assert.equal(stats.real_n, 15);
 assert.equal(stats.promotion_eligible_real_n, true);
 assert.equal(stats.prior_effective_n, 0);
+assert.equal(stats.route_id, 'opencode:omen-alpha');
 const finalRegistry = JSON.parse(fs.readFileSync(path.join(home, 'config/model-registry.json'), 'utf8'));
 assert.equal(finalRegistry.models['omen-alpha'].harness, 'opencode');
 assert.ok(finalRegistry.roles.fast_precise.challengers.includes('omen-alpha'));
@@ -98,10 +178,90 @@ assert.ok(events.some((event) => event.outcome === 'refused' && event.refusal?.r
 
 const deterministic = evaluator.TASK_CLASSES.brownfield_debugging;
 assert.deepEqual(deterministic.deterministic, ['bug_reproduced', 'regression_tests_added', 'tests_pass', 'task_completed']);
-const policyBlocked = evaluator.explorationPolicy({ stage: 'CHALLENGER', realN: 0, dataClass: 'PERSONAL_PRIVATE', retryTolerant: true });
+const policyBlocked = evaluator.explorationPolicy({
+  stage: 'CHALLENGER',
+  realN: 0,
+  dataClass: 'PERSONAL_SENSITIVE',
+  routeProfile: 'opencode_go',
+  resolvedRuntimeModel: 'opencode-go/qwen3.7-max',
+  retryTolerant: true
+});
 assert.equal(policyBlocked.rate, 0);
-const policySteady = evaluator.explorationPolicy({ stage: 'ROUTING_ELIGIBLE', realN: 15, dataClass: 'PUBLIC', retryTolerant: true });
+const policySteady = evaluator.explorationPolicy({
+  stage: 'ROUTING_ELIGIBLE',
+  realN: 15,
+  dataClass: 'PUBLIC',
+  routeProfile: 'opencode_go',
+  resolvedRuntimeModel: 'opencode-go/omen-alpha',
+  retryTolerant: true
+});
 assert.equal(policySteady.rate, 0.05);
-const assignment = evaluator.isExplorationAssignment({ stage: 'CHALLENGER', realN: 0, dataClass: 'PUBLIC', retryTolerant: true, random: 0.17 });
+const assignment = evaluator.isExplorationAssignment({
+  stage: 'CHALLENGER',
+  realN: 0,
+  dataClass: 'PRIVATE_CODE',
+  routeProfile: 'opencode_go',
+  resolvedRuntimeModel: 'opencode-go/omen-alpha',
+  retryTolerant: true,
+  random: 0.17
+});
 assert.equal(assignment.assigned, true);
+
+console.log('--- Adversarial promotion and RouteTarget isolation ---');
+prepareChallenger('opencode:omen-conflict');
+const conflictingSignals = evaluator.recordRealTraffic({
+  routeId: 'opencode:omen-conflict',
+  taskClass: 'targeted_edit',
+  dataClass: 'PUBLIC',
+  retryTolerant: true,
+  success: true,
+  tests_pass: false,
+  task_completed: true
+});
+assert.equal(conflictingSignals.stats.real_successes, 0);
+assert.equal(conflictingSignals.event.outcome, 'fail');
+
+for (const [routeId, successfulAttempts] of [['opencode:omen-zero', 0], ['opencode:omen-one', 1]]) {
+  prepareChallenger(routeId);
+  let last;
+  for (let index = 0; index < 15; index += 1) {
+    const passed = index >= 15 - successfulAttempts;
+    last = evaluator.recordRealTraffic({
+      routeId,
+      taskClass: 'targeted_edit',
+      dataClass: 'PUBLIC',
+      retryTolerant: true,
+      tests_pass: passed,
+      task_completed: true
+    });
+  }
+  assert.equal(last.stats.real_n, 15);
+  assert.equal(last.stats.real_successes, successfulAttempts);
+  assert.equal(last.promoted, false, `${routeId} must not promote with ${successfulAttempts}/15 successes`);
+  assert.notEqual(last.route.routing_status, 'ROUTING_ELIGIBLE');
+  assert.equal(last.promotionGate.passed, false);
+}
+
+prepareChallenger('codex:shared-luna');
+for (let index = 0; index < 15; index += 1) {
+  result = evaluator.recordRealTraffic({
+    routeId: 'codex:shared-luna',
+    taskClass: 'targeted_edit',
+    dataClass: 'PUBLIC',
+    retryTolerant: true,
+    tests_pass: true,
+    task_completed: true
+  });
+}
+assert.equal(result.route.routing_status, 'ROUTING_ELIGIBLE');
+const isolatedRoutes = JSON.parse(fs.readFileSync(routesPath, 'utf8'));
+assert.equal(isolatedRoutes.find((route) => route.route_id === 'codex:shared-luna').routing_status, 'ROUTING_ELIGIBLE');
+assert.equal(isolatedRoutes.find((route) => route.route_id === 'opencode:shared-luna').routing_status, 'BENCHMARK_ONLY');
+const isolatedLearned = JSON.parse(fs.readFileSync(learnedPath, 'utf8'));
+assert.equal(isolatedLearned.role_statistics.fast_precise['codex:shared-luna'].real_n, 15);
+assert.equal(isolatedLearned.role_statistics.fast_precise['opencode:shared-luna'], undefined);
+const isolatedStatus = evaluator.status({ routeId: 'codex:shared-luna' })[0];
+assert.equal(isolatedStatus.role_statistics[0].stats.route_id, 'codex:shared-luna');
+assert.equal(evaluator.status({ routeId: 'opencode:shared-luna' })[0].role_statistics.length, 0);
+
 console.log('Routing evaluation lifecycle, promotion gate, deterministic evidence, and exploration policy passed');

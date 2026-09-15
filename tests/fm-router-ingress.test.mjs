@@ -88,9 +88,9 @@ console.log('--- Test 1: Path A (Router V2 / Orchestrator API) full lifecycle --
 
   // Verify telemetry log entries for Path A
   const records = readTelemetry().filter(r => r.task_id === taskId);
-  assert.equal(records.length, 3, 'started, dispatched, completed');
+  assert.equal(records.length, 5, 'selected, launching, dispatched, running, completed');
 
-  const [started, dispatched, completed] = records;
+  const [started, launching, dispatched, running, completed] = records;
 
   // Verify started record
   assert.equal(started.route_execution_id, routeExecId);
@@ -108,6 +108,11 @@ console.log('--- Test 1: Path A (Router V2 / Orchestrator API) full lifecycle --
   assert.ok(started.quota_snapshot_before, 'quota snapshot before must be captured');
   assert.ok(started.started_at, 'started_at timestamp must be present');
 
+  assert.equal(launching.route_execution_id, routeExecId);
+  assert.equal(launching.dispatch_status, 'launching');
+  assert.equal(launching.lifecycle_state, 'LAUNCHING');
+  assert.ok(launching.launching_at, 'launching_at timestamp must be present');
+
   // Verify dispatched record
   assert.equal(dispatched.route_execution_id, routeExecId);
   assert.equal(dispatched.parent_route_execution_id, routeExecId);
@@ -119,6 +124,12 @@ console.log('--- Test 1: Path A (Router V2 / Orchestrator API) full lifecycle --
   assert.equal(dispatched.worktree, '/tmp/wt-path-a');
   assert.equal(dispatched.pid, 12345);
   assert.ok(dispatched.dispatched_at, 'dispatched_at timestamp must be present');
+
+  assert.equal(running.route_execution_id, routeExecId);
+  assert.equal(running.dispatch_status, 'running');
+  assert.equal(running.lifecycle_state, 'RUNNING');
+  assert.equal(running.actual_model, 'gpt-5.6-terra');
+  assert.ok(running.running_at, 'running_at timestamp must be present');
 
   // Verify completed record
   assert.equal(completed.route_execution_id, routeExecId);
@@ -165,14 +176,15 @@ console.log('--- Test 2: Path A recursive retry on launch failure ---');
   assert.equal(attempt, 2);
 
   const records = readTelemetry().filter(r => r.task_id === taskId);
-  assert.equal(records.length, 4, 'attempt 1 started, attempt 1 failed, attempt 2 started, attempt 2 dispatched');
+  assert.equal(records.length, 7, 'attempt 1 selected/launching/failed, attempt 2 selected/launching/dispatched/running');
 
-  const [attempt1Started, attempt1Failed, attempt2Started, attempt2Dispatched] = records;
+  const [attempt1Started, attempt1Launching, attempt1Failed, attempt2Started, attempt2Launching, attempt2Dispatched, attempt2Running] = records;
   const parentId = attempt1Started.route_execution_id;
 
   assert.equal(attempt1Started.attempt_number, 1);
   assert.equal(attempt1Started.retry_count, 0);
   assert.equal(attempt1Started.parent_route_execution_id, parentId);
+  assert.equal(attempt1Launching.lifecycle_state, 'LAUNCHING');
 
   assert.equal(attempt1Failed.route_execution_id, parentId);
   assert.equal(attempt1Failed.parent_route_execution_id, parentId);
@@ -186,6 +198,8 @@ console.log('--- Test 2: Path A recursive retry on launch failure ---');
   assert.equal(attempt2Started.attempt_number, 2, 'attempt number must be 2');
   assert.equal(attempt2Started.retry_count, 1, 'retry count must be 1');
   assert.equal(attempt2Started.route_execution_id, `${parentId}:retry-1`);
+  assert.equal(attempt2Launching.route_execution_id, `${parentId}:retry-1`);
+  assert.equal(attempt2Launching.lifecycle_state, 'LAUNCHING');
 
   assert.equal(attempt2Dispatched.parent_route_execution_id, parentId);
   assert.equal(attempt2Dispatched.route_execution_id, `${parentId}:retry-1`);
@@ -193,6 +207,8 @@ console.log('--- Test 2: Path A recursive retry on launch failure ---');
   assert.equal(attempt2Dispatched.lifecycle_state, 'DISPATCHED');
   assert.equal(attempt2Dispatched.attempt_number, 2);
   assert.equal(attempt2Dispatched.retry_count, 1);
+  assert.equal(attempt2Running.route_execution_id, `${parentId}:retry-1`);
+  assert.equal(attempt2Running.lifecycle_state, 'RUNNING');
 }
 
 console.log('--- Test 3: Path B (Legacy / Manual) unified ingress ---');
@@ -210,7 +226,6 @@ console.log('--- Test 3: Path B (Legacy / Manual) unified ingress ---');
       '--parent-execution-id', 'rex-path-b-001',
       '--path', 'B',
       '--task-classification', 'crewmate',
-      '--data-class', 'LEGACY_UNCLASSIFIED',
       '--harness', 'claude',
       '--model', 'claude-sonnet-5',
       '--effort', 'medium'
@@ -232,6 +247,26 @@ console.log('--- Test 3: Path B (Legacy / Manual) unified ingress ---');
   assert.equal(startObj.route_decision.harness, 'claude');
   assert.equal(startObj.route_decision.model, 'claude-sonnet-5');
   assert.ok(startObj.quota_snapshot_before, 'quota snapshot before must be captured in Path B');
+  assert.equal(startObj.data_class, null);
+  assert.equal(startObj.classification_status, 'UNCLASSIFIED_LEGACY');
+
+  const launchingOut = execFileSync(
+    process.execPath,
+    [
+      ROUTER_BIN,
+      'ingress-launching',
+      '--task-id', taskId,
+      '--route-execution-id', 'rex-path-b-001',
+      '--parent-execution-id', 'rex-path-b-001',
+      '--path', 'B',
+      '--harness', 'claude',
+      '--model', 'claude-sonnet-5',
+      '--effort', 'medium'
+    ],
+    { encoding: 'utf8', env: { ...process.env, FM_HOME: home } }
+  );
+  const launchingObj = JSON.parse(launchingOut);
+  assert.equal(launchingObj.lifecycle_state, 'LAUNCHING');
 
   // Test CLI invocation of ingress-dispatched
   const dispOut = execFileSync(
@@ -264,6 +299,31 @@ console.log('--- Test 3: Path B (Legacy / Manual) unified ingress ---');
   assert.equal(dispObj.actual_model, 'claude-sonnet-5');
   assert.equal(dispObj.herdr_worker_id, 'win-path-b');
   assert.equal(dispObj.pid, 65432);
+
+  const runningOut = execFileSync(
+    process.execPath,
+    [
+      ROUTER_BIN,
+      'ingress-running',
+      '--task-id', taskId,
+      '--route-execution-id', 'rex-path-b-001',
+      '--parent-execution-id', 'rex-path-b-001',
+      '--path', 'B',
+      '--harness', 'claude',
+      '--model', 'claude-sonnet-5',
+      '--effort', 'medium',
+      '--actual-harness', 'claude',
+      '--actual-model', 'claude-sonnet-5',
+      '--actual-effort', 'medium',
+      '--worker-id', 'win-path-b',
+      '--worktree', '/tmp/wt-path-b',
+      '--backend', 'tmux',
+      '--pid', '65432'
+    ],
+    { encoding: 'utf8', env: { ...process.env, FM_HOME: home } }
+  );
+  const runningObj = JSON.parse(runningOut);
+  assert.equal(runningObj.lifecycle_state, 'RUNNING');
 
   // Write meta for completion read
   fs.mkdirSync(path.join(home, 'state'), { recursive: true });
@@ -302,10 +362,12 @@ console.log('--- Test 3: Path B (Legacy / Manual) unified ingress ---');
   assert.ok(compObj.quota_snapshot_after);
 
   const bRecords = readTelemetry().filter(r => r.task_id === taskId);
-  assert.equal(bRecords.length, 3);
+  assert.equal(bRecords.length, 5);
   assert.ok(bRecords.every(r => r.route_execution_id === 'rex-path-b-001'), 'all records must share stable route_execution_id');
   assert.equal(bRecords[0].candidate_route_set_marker, 'legacy/manual decision, no candidate set evaluated');
   assert.equal(bRecords[0].route_decision.decision_type, 'legacy_manual');
+  assert.equal(bRecords[0].data_class, null);
+  assert.equal(bRecords[0].classification_status, 'UNCLASSIFIED_LEGACY');
 }
 
 console.log('--- Test 4: Secondmate Relaunch (Bootstrap Bypass Closure) ---');
@@ -322,7 +384,6 @@ console.log('--- Test 4: Secondmate Relaunch (Bootstrap Bypass Closure) ---');
       '--parent-execution-id', 'rex-sm-001',
       '--path', 'B',
       '--task-classification', 'secondmate',
-      '--data-class', 'LEGACY_UNCLASSIFIED',
       '--harness', 'claude',
       '--model', 'default',
       '--effort', 'default',
@@ -541,27 +602,36 @@ esac
       .map(line => JSON.parse(line));
 
     const pathBRecs = realRecords.filter(r => r.task_id === taskIdB);
-    assert.equal(pathBRecs.length, 3, 'Path B must have started, dispatched, completed');
-    const [startB, dispB, compB] = pathBRecs;
+    assert.equal(pathBRecs.length, 5, 'Path B must have selected, launched, dispatched, run, completed');
+    const [startB, launchB, dispB, runB, compB] = pathBRecs;
     assert.equal(startB.dispatch_path, 'B');
     assert.equal(startB.candidate_route_set_marker, 'legacy/manual decision, no candidate set evaluated');
     assert.equal(startB.candidate_routes, null);
     assert.equal(startB.route_decision.decision_type, 'legacy_manual');
+    assert.equal(startB.data_class, null);
+    assert.equal(startB.classification_status, 'UNCLASSIFIED_LEGACY');
+    assert.equal(launchB.lifecycle_state, 'LAUNCHING');
     assert.equal(startB.route_execution_id, dispB.route_execution_id);
+    assert.equal(startB.route_execution_id, runB.route_execution_id);
     assert.equal(startB.route_execution_id, compB.route_execution_id);
     assert.equal(dispB.dispatch_status, 'dispatched');
+    assert.equal(runB.dispatch_status, 'running');
     assert.equal(compB.dispatch_status, 'completed');
 
     const pathARecs = realRecords.filter(r => r.task_id === taskIdA);
-    assert.equal(pathARecs.length, 3, 'Path A must have started, dispatched, completed');
-    const [startA, dispA, compA] = pathARecs;
+    assert.equal(pathARecs.length, 5, 'Path A must have selected, launched, dispatched, run, completed');
+    const [startA, launchA, dispA, runA, compA] = pathARecs;
     assert.equal(startA.dispatch_path, 'A');
     assert.equal(startA.candidate_route_set_marker, null);
     assert.ok(startA.candidate_routes.length > 0);
     assert.equal(startA.route_decision.decision_type, 'router_v2');
+    assert.equal(startA.classification_status, 'CLASSIFIED');
+    assert.equal(launchA.lifecycle_state, 'LAUNCHING');
     assert.equal(startA.route_execution_id, dispA.route_execution_id);
+    assert.equal(startA.route_execution_id, runA.route_execution_id);
     assert.equal(startA.route_execution_id, compA.route_execution_id);
     assert.equal(dispA.dispatch_status, 'dispatched');
+    assert.equal(runA.dispatch_status, 'running');
     assert.equal(compA.dispatch_status, 'completed');
   } finally {
     process.env.PATH = prevPath;

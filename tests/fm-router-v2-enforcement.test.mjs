@@ -82,6 +82,34 @@ const unknown = resolveLiveQuotaPools({
 assert.equal(unknown.codex_plus.scarcity_state, 'UNKNOWN');
 assert.notEqual(unknown.codex_plus.scarcity_state, 'ABUNDANT');
 
+// A stale/unavailable OpenCode refresh must not leak last-known-good windows into
+// Router decisions as if they were current account usage.
+const quotaProbeDir = fs.mkdtempSync(path.join(home, 'quota-live-probe-'));
+const staleQuotaScript = path.join(quotaProbeDir, 'stale-quota.mjs');
+const quotaAxiBin = path.join(quotaProbeDir, 'bin');
+fs.mkdirSync(quotaAxiBin, { recursive: true });
+fs.writeFileSync(staleQuotaScript, [
+  '#!/usr/bin/env node',
+  'console.log(JSON.stringify({source:"last_known_good",stale:true,rolling_5h:{percent_remaining:99},weekly:{percent_remaining:99},monthly:{percent_remaining:99}}));'
+].join('\n') + '\n');
+fs.chmodSync(staleQuotaScript, 0o755);
+fs.writeFileSync(path.join(quotaAxiBin, 'quota-axi'), '#!/usr/bin/env sh\nprintf \'%s\\n\' \'{"schemaVersion":5,"providers":[]}\'\n');
+fs.chmodSync(path.join(quotaAxiBin, 'quota-axi'), 0o755);
+const oldPath = process.env.PATH;
+const oldDisableLiveQuota = process.env.FM_DISABLE_LIVE_QUOTA;
+const oldQuotaScript = process.env.FM_OPENCODE_QUOTA_SCRIPT;
+process.env.PATH = `${quotaAxiBin}:${oldPath}`;
+delete process.env.FM_DISABLE_LIVE_QUOTA;
+process.env.FM_OPENCODE_QUOTA_SCRIPT = staleQuotaScript;
+const staleLive = resolveLiveQuotaPools({ useLiveAxi: true });
+assert.equal(staleLive.opencode_go.scarcity_state, 'UNKNOWN');
+assert.equal(staleLive.opencode_go.status, 'UNKNOWN');
+process.env.PATH = oldPath;
+if (oldDisableLiveQuota === undefined) delete process.env.FM_DISABLE_LIVE_QUOTA;
+else process.env.FM_DISABLE_LIVE_QUOTA = oldDisableLiveQuota;
+if (oldQuotaScript === undefined) delete process.env.FM_OPENCODE_QUOTA_SCRIPT;
+else process.env.FM_OPENCODE_QUOTA_SCRIPT = oldQuotaScript;
+
 const exhausted = scoreAndSelectRoute({
   role: 'general_engineer',
   dataClass: 'PUBLIC',

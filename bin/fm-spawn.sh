@@ -3983,11 +3983,23 @@ if [ "$ROUTE_EXECUTION_ID_SET" -eq 0 ]; then
     --parent-execution-id "$PARENT_EXECUTION_ID" \
     --path "B" \
     --task-classification "${ROLE:-$KIND}" \
-    --data-class "${DATA_CLASS:-LEGACY_UNCLASSIFIED}" \
+    --data-class "${DATA_CLASS:-}" \
     --harness "$HARNESS" \
     --model "${MODEL:-default}" \
     --effort "${EFFORT:-default}" \
     --route-id "${ROUTE_ID:-}" \
+    ${extra_relaunch_flag[@]+"${extra_relaunch_flag[@]}"} \
+    >/dev/null 2>&1 || true
+  node "$FM_ROOT/bin/fm-router-v2.mjs" ingress-launching \
+    --task-id "$ID" \
+    --route-execution-id "$ROUTE_EXECUTION_ID" \
+    --parent-execution-id "$PARENT_EXECUTION_ID" \
+    --path "B" \
+    --data-class "${DATA_CLASS:-}" \
+    --route-id "${ROUTE_ID:-}" \
+    --harness "$HARNESS" \
+    --model "${MODEL:-default}" \
+    --effort "${EFFORT:-default}" \
     ${extra_relaunch_flag[@]+"${extra_relaunch_flag[@]}"} \
     >/dev/null 2>&1 || true
 fi
@@ -4290,6 +4302,7 @@ if [ "$SPAWN_BACKLOG_COMMIT_STATUS" -ne 0 ]; then
       --route-execution-id "$ROUTE_EXECUTION_ID" \
       --parent-execution-id "$PARENT_EXECUTION_ID" \
       --path "B" \
+      --data-class "${DATA_CLASS:-}" \
       --error "backlog commit failed: ${FM_BACKLOG_TRANSITION_ERROR:-unknown}" \
       ${extra_relaunch_flag[@]+"${extra_relaunch_flag[@]}"} \
       >/dev/null 2>&1 || true
@@ -4329,6 +4342,30 @@ if [ "$ROUTE_EXECUTION_ID_SET" -eq 0 ]; then
     --route-execution-id "$ROUTE_EXECUTION_ID" \
     --parent-execution-id "$PARENT_EXECUTION_ID" \
     --path "B" \
+    --data-class "${DATA_CLASS:-}" \
+    --actual-harness "$HARNESS" \
+    --actual-model "${MODEL:-default}" \
+    --actual-effort "${EFFORT:-default}" \
+    --route-id "${ROUTE_ID:-}" \
+    --harness "$HARNESS" \
+    --model "${MODEL:-default}" \
+    --effort "${EFFORT:-default}" \
+    --worker-id "$META_WINDOW" \
+    --worktree "$WT" \
+    --backend "$BACKEND" \
+    --pid "${PID:-}" \
+    ${extra_relaunch_flag[@]+"${extra_relaunch_flag[@]}"} \
+    >/dev/null 2>&1 || true
+  node "$FM_ROOT/bin/fm-router-v2.mjs" ingress-running \
+    --task-id "$ID" \
+    --route-execution-id "$ROUTE_EXECUTION_ID" \
+    --parent-execution-id "$PARENT_EXECUTION_ID" \
+    --path "B" \
+    --data-class "${DATA_CLASS:-}" \
+    --route-id "${ROUTE_ID:-}" \
+    --harness "$HARNESS" \
+    --model "${MODEL:-default}" \
+    --effort "${EFFORT:-default}" \
     --actual-harness "$HARNESS" \
     --actual-model "${MODEL:-default}" \
     --actual-effort "${EFFORT:-default}" \

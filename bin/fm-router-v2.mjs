@@ -59,6 +59,23 @@ function generatedStateFresh(filePath, value) {
 }
 
 const PRIVACY_METADATA_DEFAULT_MAX_AGE_DAYS = 30;
+const ACTIVE_DATA_CLASSES = new Set(['PUBLIC', 'SANITIZED', 'PRIVATE_CODE', 'PERSONAL_SENSITIVE', 'SECRET']);
+
+function normalizeTelemetryClassification(dataClass, classificationStatus = null) {
+  if (dataClass === null || dataClass === undefined || dataClass === '' || dataClass === 'LEGACY_UNCLASSIFIED') {
+    return {
+      dataClass: null,
+      classificationStatus: classificationStatus || 'UNCLASSIFIED_LEGACY'
+    };
+  }
+  if (!ACTIVE_DATA_CLASSES.has(dataClass)) {
+    throw new Error(`Unknown telemetry data class: ${dataClass}`);
+  }
+  return {
+    dataClass,
+    classificationStatus: classificationStatus || 'CLASSIFIED'
+  };
+}
 
 // Route-owner privacy metadata is hand-verified documentation evidence, not generated telemetry,
 // so it uses its own longer revalidation cadence instead of generatedStateFresh's 24h window.
@@ -688,7 +705,8 @@ export function ingressDispatchStarted({
   retryCount = 0,
   path = 'A',
   taskClassification = null,
-  dataClass = 'LEGACY_UNCLASSIFIED',
+  dataClass = null,
+  classificationStatus = null,
   candidateRoutes = null,
   candidateRouteSetMarker = null,
   routeDecision = null,
@@ -704,6 +722,7 @@ export function ingressDispatchStarted({
   const execId = routeExecutionId || `rex-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
   const rootId = parentExecutionId || execId;
   const now = new Date().toISOString();
+  const classification = normalizeTelemetryClassification(dataClass, classificationStatus);
 
   let quotaBefore = quotaSnapshotBefore;
   if (!quotaBefore) {
@@ -725,7 +744,8 @@ export function ingressDispatchStarted({
     dispatch_type: dispatchType,
     task_classification: taskClassification || 'general_engineer',
     requested_role: taskClassification || 'general_engineer',
-    data_class: dataClass,
+    data_class: classification.dataClass,
+    classification_status: classification.classificationStatus,
     candidate_routes: candidateRoutes,
     candidate_route_set_marker: candidateRouteSetMarker,
     route_decision: routeDecision,
@@ -742,9 +762,54 @@ export function ingressDispatchStarted({
     lifecycle_state: 'SELECTED',
     started_at: now,
     timestamp: now,
-    ...extra
+    ...extra,
+    data_class: classification.dataClass,
+    classification_status: classification.classificationStatus
   };
 
+  return logTelemetry(record);
+}
+
+export function ingressDispatchLaunching({
+  taskId,
+  routeExecutionId,
+  parentExecutionId = null,
+  attemptNumber = 1,
+  retryCount = 0,
+  path = 'A',
+  selectedRouteId = null,
+  selectedHarness = null,
+  selectedModel = null,
+  selectedEffort = null,
+  dataClass = null,
+  classificationStatus = null,
+  dispatchType = 'task_dispatch',
+  extra = {}
+}) {
+  const rootId = parentExecutionId || routeExecutionId;
+  const now = new Date().toISOString();
+  const classification = normalizeTelemetryClassification(dataClass, classificationStatus);
+  const record = {
+    route_execution_id: routeExecutionId,
+    parent_route_execution_id: rootId,
+    execution_id: routeExecutionId,
+    attempt_number: attemptNumber,
+    retry_count: retryCount,
+    task_id: taskId,
+    dispatch_path: path,
+    dispatch_type: dispatchType,
+    selected_route_id: selectedRouteId,
+    selected_harness: selectedHarness,
+    selected_model: selectedModel,
+    selected_effort: selectedEffort,
+    dispatch_status: 'launching',
+    lifecycle_state: 'LAUNCHING',
+    launching_at: now,
+    timestamp: now,
+    ...extra,
+    data_class: classification.dataClass,
+    classification_status: classification.classificationStatus
+  };
   return logTelemetry(record);
 }
 
@@ -762,6 +827,8 @@ export function ingressDispatchDispatched({
   actualHarness = null,
   actualModel = null,
   actualEffort = null,
+  dataClass = null,
+  classificationStatus = null,
   workerId = null,
   worktree = null,
   pid = null,
@@ -771,6 +838,7 @@ export function ingressDispatchDispatched({
 }) {
   const rootId = parentExecutionId || routeExecutionId;
   const now = new Date().toISOString();
+  const classification = normalizeTelemetryClassification(dataClass, classificationStatus);
 
   const record = {
     route_execution_id: routeExecutionId,
@@ -798,9 +866,70 @@ export function ingressDispatchDispatched({
     lifecycle_state: 'DISPATCHED',
     dispatched_at: now,
     timestamp: now,
-    ...extra
+    ...extra,
+    data_class: classification.dataClass,
+    classification_status: classification.classificationStatus
   };
 
+  return logTelemetry(record);
+}
+
+export function ingressDispatchRunning({
+  taskId,
+  routeExecutionId,
+  parentExecutionId = null,
+  attemptNumber = 1,
+  retryCount = 0,
+  path = 'A',
+  selectedRouteId = null,
+  selectedHarness = null,
+  selectedModel = null,
+  selectedEffort = null,
+  actualHarness = null,
+  actualModel = null,
+  actualEffort = null,
+  dataClass = null,
+  classificationStatus = null,
+  workerId = null,
+  worktree = null,
+  pid = null,
+  backend = null,
+  dispatchType = 'task_dispatch',
+  extra = {}
+}) {
+  const rootId = parentExecutionId || routeExecutionId;
+  const now = new Date().toISOString();
+  const classification = normalizeTelemetryClassification(dataClass, classificationStatus);
+  const record = {
+    route_execution_id: routeExecutionId,
+    parent_route_execution_id: rootId,
+    execution_id: routeExecutionId,
+    attempt_number: attemptNumber,
+    retry_count: retryCount,
+    task_id: taskId,
+    dispatch_path: path,
+    dispatch_type: dispatchType,
+    selected_route_id: selectedRouteId,
+    selected_harness: selectedHarness,
+    selected_model: selectedModel,
+    selected_effort: selectedEffort,
+    actual_harness: actualHarness,
+    actual_model: actualModel,
+    actual_effort: actualEffort,
+    herdr_worker_id: workerId || 'unknown',
+    herdr_task_id: taskId,
+    worktree: worktree || null,
+    pid: pid ? Number(pid) : null,
+    backend: backend || null,
+    dispatch_match: true,
+    dispatch_status: 'running',
+    lifecycle_state: 'RUNNING',
+    running_at: now,
+    timestamp: now,
+    ...extra,
+    data_class: classification.dataClass,
+    classification_status: classification.classificationStatus
+  };
   return logTelemetry(record);
 }
 
@@ -815,6 +944,8 @@ export function ingressDispatchFailed({
   selectedHarness = null,
   selectedModel = null,
   selectedEffort = null,
+  dataClass = null,
+  classificationStatus = null,
   errorCategory = 'harness_launch_failure',
   errorMessage = '',
   dispatchType = 'task_dispatch',
@@ -822,6 +953,7 @@ export function ingressDispatchFailed({
 }) {
   const rootId = parentExecutionId || routeExecutionId;
   const now = new Date().toISOString();
+  const classification = normalizeTelemetryClassification(dataClass, classificationStatus);
 
   const record = {
     route_execution_id: routeExecutionId,
@@ -847,7 +979,9 @@ export function ingressDispatchFailed({
     error_message: String(errorMessage).slice(0, 500),
     completed_at: now,
     timestamp: now,
-    ...extra
+    ...extra,
+    data_class: classification.dataClass,
+    classification_status: classification.classificationStatus
   };
 
   return logTelemetry(record);
@@ -928,6 +1062,23 @@ export function dispatchThroughHerdr({
     selectedEffort: selectedRoute.reasoning_effort,
     diagnosticConstraint
   });
+  ingressDispatchLaunching({
+    taskId,
+    routeExecutionId: execId,
+    parentExecutionId: rootExecId,
+    attemptNumber,
+    retryCount,
+    path: 'A',
+    selectedRouteId: selectedRoute.route_id,
+    selectedHarness: selectedRoute.harness,
+    selectedModel: selectedRoute.resolved_runtime_model,
+    selectedEffort: selectedRoute.reasoning_effort,
+    dataClass,
+    extra: {
+      requested_role: role,
+      ...(diagnosticConstraint ? { diagnostic_constraint: diagnosticConstraint } : {})
+    }
+  });
 
   const effectiveProjectDir = projectDir || currentFmHome();
   const spawnArgs = [path.join(ROOT, 'bin', 'fm-spawn.sh'), taskId, effectiveProjectDir];
@@ -984,10 +1135,10 @@ export function dispatchThroughHerdr({
       selectedHarness: selectedRoute.harness,
       selectedModel: selectedRoute.resolved_runtime_model,
       selectedEffort: selectedRoute.reasoning_effort,
+      dataClass,
       errorMessage: String(spawnResult?.error || 'spawn failed').slice(0, 500),
       extra: {
         requested_role: role,
-        data_class: dataClass,
         ...(diagnosticConstraint ? { diagnostic_constraint: diagnosticConstraint } : {})
       }
     });
@@ -1047,13 +1198,41 @@ export function dispatchThroughHerdr({
     actualHarness: meta.harness || selectedRoute.harness,
     actualModel: meta.model || selectedRoute.resolved_runtime_model,
     actualEffort: meta.effort || selectedRoute.reasoning_effort,
+    dataClass,
     workerId: meta.window || meta.herdr_pane_id || 'unknown',
     worktree: meta.worktree || null,
     pid: meta.pid ? Number(meta.pid) : null,
     backend: meta.backend || 'herdr',
     extra: {
       requested_role: role,
-      data_class: dataClass,
+      ...(diagnosticConstraint ? { diagnostic_constraint: diagnosticConstraint } : {}),
+      herdr_session: meta.herdr_session || null,
+      herdr_workspace_id: meta.herdr_workspace_id || null,
+      herdr_tab_id: meta.herdr_tab_id || null,
+      herdr_pane_id: meta.herdr_pane_id || null
+    }
+  });
+  ingressDispatchRunning({
+    taskId,
+    routeExecutionId: execId,
+    parentExecutionId: rootExecId,
+    attemptNumber,
+    retryCount,
+    path: 'A',
+    selectedRouteId: selectedRoute.route_id,
+    selectedHarness: selectedRoute.harness,
+    selectedModel: selectedRoute.resolved_runtime_model,
+    selectedEffort: selectedRoute.reasoning_effort,
+    actualHarness: meta.harness || selectedRoute.harness,
+    actualModel: meta.model || selectedRoute.resolved_runtime_model,
+    actualEffort: meta.effort || selectedRoute.reasoning_effort,
+    dataClass,
+    workerId: meta.window || meta.herdr_pane_id || 'unknown',
+    worktree: meta.worktree || null,
+    pid: meta.pid ? Number(meta.pid) : null,
+    backend: meta.backend || 'herdr',
+    extra: {
+      requested_role: role,
       ...(diagnosticConstraint ? { diagnostic_constraint: diagnosticConstraint } : {}),
       herdr_session: meta.herdr_session || null,
       herdr_workspace_id: meta.herdr_workspace_id || null,
@@ -1281,7 +1460,8 @@ if (process.argv[1] && process.argv[1].endsWith('fm-router-v2.mjs')) {
       parentExecutionId: flags['parent-execution-id'],
       path: flags['path'] || 'B',
       taskClassification: flags['task-classification'] || flags['role'] || flags['kind'] || 'crewmate',
-      dataClass: flags['data-class'] || 'LEGACY_UNCLASSIFIED',
+      dataClass: flags['data-class'] || null,
+      classificationStatus: flags['classification-status'] || null,
       candidateRoutes: null,
       candidateRouteSetMarker: marker,
       routeDecision: {
@@ -1296,6 +1476,26 @@ if (process.argv[1] && process.argv[1].endsWith('fm-router-v2.mjs')) {
       selectedHarness: flags['harness'] || null,
       selectedModel: flags['model'] || null,
       selectedEffort: flags['effort'] || null,
+      dataClass: flags['data-class'] || null,
+      classificationStatus: flags['classification-status'] || null,
+      dispatchType
+    });
+    console.log(JSON.stringify(entry));
+  } else if (cmd === 'ingress-launching') {
+    const flags = parseCliFlags(process.argv.slice(3));
+    const isSecondmateRelaunch = Boolean(flags['secondmate-relaunch']);
+    const dispatchType = isSecondmateRelaunch ? 'system_internal_relaunch' : 'task_dispatch';
+    const entry = ingressDispatchLaunching({
+      taskId: flags['task-id'],
+      routeExecutionId: flags['route-execution-id'],
+      parentExecutionId: flags['parent-execution-id'],
+      path: flags['path'] || 'B',
+      selectedRouteId: flags['route-id'] || null,
+      selectedHarness: flags['harness'] || null,
+      selectedModel: flags['model'] || null,
+      selectedEffort: flags['effort'] || null,
+      dataClass: flags['data-class'] || null,
+      classificationStatus: flags['classification-status'] || null,
       dispatchType
     });
     console.log(JSON.stringify(entry));
@@ -1311,6 +1511,33 @@ if (process.argv[1] && process.argv[1].endsWith('fm-router-v2.mjs')) {
       actualHarness: flags['actual-harness'],
       actualModel: flags['actual-model'],
       actualEffort: flags['actual-effort'],
+      dataClass: flags['data-class'] || null,
+      classificationStatus: flags['classification-status'] || null,
+      workerId: flags['worker-id'] || flags['window'],
+      worktree: flags['worktree'],
+      backend: flags['backend'],
+      pid: flags['pid'],
+      dispatchType
+    });
+    console.log(JSON.stringify(entry));
+  } else if (cmd === 'ingress-running') {
+    const flags = parseCliFlags(process.argv.slice(3));
+    const isSecondmateRelaunch = Boolean(flags['secondmate-relaunch']);
+    const dispatchType = isSecondmateRelaunch ? 'system_internal_relaunch' : 'task_dispatch';
+    const entry = ingressDispatchRunning({
+      taskId: flags['task-id'],
+      routeExecutionId: flags['route-execution-id'],
+      parentExecutionId: flags['parent-execution-id'],
+      path: flags['path'] || 'B',
+      selectedRouteId: flags['route-id'] || null,
+      selectedHarness: flags['harness'] || null,
+      selectedModel: flags['model'] || null,
+      selectedEffort: flags['effort'] || null,
+      actualHarness: flags['actual-harness'],
+      actualModel: flags['actual-model'],
+      actualEffort: flags['actual-effort'],
+      dataClass: flags['data-class'] || null,
+      classificationStatus: flags['classification-status'] || null,
       workerId: flags['worker-id'] || flags['window'],
       worktree: flags['worktree'],
       backend: flags['backend'],
@@ -1327,6 +1554,8 @@ if (process.argv[1] && process.argv[1].endsWith('fm-router-v2.mjs')) {
       routeExecutionId: flags['route-execution-id'],
       parentExecutionId: flags['parent-execution-id'],
       path: flags['path'] || 'B',
+      dataClass: flags['data-class'] || null,
+      classificationStatus: flags['classification-status'] || null,
       errorMessage: flags['error'] || 'spawn failed',
       dispatchType
     });
