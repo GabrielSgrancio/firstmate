@@ -27,6 +27,20 @@ assert.ok(openCode.models.some(model => model.raw_id === 'qwen3.7-max'));
 assert.equal(openCode.models.find(model => model.raw_id === 'qwen3.7-max').expected_normalized_burn, 12.5);
 assert.ok(openCode.models.some(model => model.routing_status === 'BENCHMARK_ONLY'));
 
+// Researched OpenCode Go models no longer fall through to the flat
+// default burn/BENCHMARK_ONLY pair; each gets its own researched burn and
+// becomes ROUTING_ELIGIBLE, and the two below must differ from each other.
+const glmFlash = openCode.models.find(model => model.raw_id === 'glm-5.3-flash');
+const kimiCode = openCode.models.find(model => model.raw_id === 'kimi-k2.7-code');
+assert.equal(glmFlash.routing_status, 'ROUTING_ELIGIBLE');
+assert.equal(glmFlash.expected_normalized_burn, 0.9);
+assert.equal(kimiCode.routing_status, 'ROUTING_ELIGIBLE');
+assert.equal(kimiCode.expected_normalized_burn, 4.0);
+assert.notEqual(glmFlash.expected_normalized_burn, kimiCode.expected_normalized_burn);
+// A genuinely unresearched model still falls through to the flat default.
+assert.equal(openCode.models.find(model => model.raw_id === 'omen-alpha').expected_normalized_burn, 4.0);
+assert.equal(openCode.models.find(model => model.raw_id === 'omen-alpha').routing_status, 'BENCHMARK_ONLY');
+
 const compiled = discovery.compileRouteTargets({
   codex,
   claude,

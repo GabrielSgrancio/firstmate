@@ -453,6 +453,35 @@ export function discoverOpenCodeGo({ authPath = null, fixturePath = null } = {})
   }
 }
 
+// Relative burn = qwen3.8-flash's researched requests/5h (5,400, the existing
+// minimal_burn=1.0 anchor) divided by the model's own requests/5h, rounded to
+// one decimal. Source: data/model-intelligence-mission/mission-spec-2026-09-15.md
+// section 17 and data/model-intel-research/report.md (Qwen3.6 Plus).
+// deepseek-flash is a retired alias that resolves to V4.1 Flash (same report),
+// so it inherits that burn rather than a capacity figure of its own.
+// Models with no researched requests/5h figure yet are left on the flat
+// default and BENCHMARK_ONLY below; see the release-check report for that list.
+const OPENCODE_RESEARCHED_BURN = {
+  'mimo-v2.5': { burnProfile: 'minimal_burn', expectedNormalizedBurn: 0.2 },
+  'longcat-2.0': { burnProfile: 'minimal_burn', expectedNormalizedBurn: 0.5 },
+  'glm-5.3-flash': { burnProfile: 'minimal_burn', expectedNormalizedBurn: 0.9 },
+  'qwen3.7-plus': { burnProfile: 'light_burn', expectedNormalizedBurn: 1.3 },
+  'hy3': { burnProfile: 'light_burn', expectedNormalizedBurn: 1.3 },
+  'qwen3.6-plus': { burnProfile: 'light_burn', expectedNormalizedBurn: 1.6 },
+  'minimax-m2.7': { burnProfile: 'light_burn', expectedNormalizedBurn: 1.6 },
+  'mimo-v2.5-pro': { burnProfile: 'light_burn', expectedNormalizedBurn: 1.7 },
+  'minimax-m3': { burnProfile: 'light_burn', expectedNormalizedBurn: 1.7 },
+  'kimi-k2.7-code': { burnProfile: 'moderate_burn', expectedNormalizedBurn: 4.0 },
+  'hy4-preview': { burnProfile: 'moderate_burn', expectedNormalizedBurn: 4.0 },
+  'kimi-k2.6': { burnProfile: 'moderate_burn', expectedNormalizedBurn: 4.7 },
+  'glm-5.2': { burnProfile: 'moderate_burn', expectedNormalizedBurn: 6.1 },
+  'glm-5.1': { burnProfile: 'moderate_burn', expectedNormalizedBurn: 6.1 },
+  'glm-5.3': { burnProfile: 'heavy_burn', expectedNormalizedBurn: 24.5 },
+  'qwen3.8-max': { burnProfile: 'heavy_burn', expectedNormalizedBurn: 33.8 },
+  'grok-4.6': { burnProfile: 'heavy_burn', expectedNormalizedBurn: 32.0 },
+  'deepseek-flash': { burnProfile: 'minimal_burn', expectedNormalizedBurn: 1.2 }
+};
+
 function normalizeOpenCodeCatalog(data) {
   const rawModels = Array.isArray(data) ? data : (data.data || []);
   const now = new Date().toISOString();
@@ -480,6 +509,8 @@ function normalizeOpenCodeCatalog(data) {
     } else if (id.includes('qwen3.7-max')) {
       burnProfile = 'heavy_burn';
       expectedNormalizedBurn = 12.5;
+    } else if (OPENCODE_RESEARCHED_BURN[id]) {
+      ({ burnProfile, expectedNormalizedBurn } = OPENCODE_RESEARCHED_BURN[id]);
     } else {
       status = 'BENCHMARK_ONLY';
     }

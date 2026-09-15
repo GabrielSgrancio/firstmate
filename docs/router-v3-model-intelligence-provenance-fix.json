@@ -1,0 +1,1151 @@
+{
+  "claude-haiku-4-5-20251001": {
+    "model_version": "haiku",
+    "capabilities": {
+      "targeted_edit": {
+        "class": "VERY_STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://www.anthropic.com/news/claude-haiku-4-5",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:34:16-03:00",
+            "model_version": "haiku",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Anthropic's own Claude Haiku 4.5 announcement: ~90% of Sonnet 4.5's agentic coding performance (Augment eval), SWE-bench Verified 73.3% (50-trial avg), similar coding performance to Sonnet 4 at roughly one-third the cost and 2-5x the speed; qualitative profile across dimensions, not a per-dimension success probability.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "mechanical_tool_work": {
+        "class": "VERY_STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://www.anthropic.com/news/claude-haiku-4-5",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:34:16-03:00",
+            "model_version": "haiku",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Anthropic's own Claude Haiku 4.5 announcement: ~90% of Sonnet 4.5's agentic coding performance (Augment eval), SWE-bench Verified 73.3% (50-trial avg), similar coding performance to Sonnet 4 at roughly one-third the cost and 2-5x the speed; qualitative profile across dimensions, not a per-dimension success probability.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "test_generation": {
+        "class": "VERY_STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://www.anthropic.com/news/claude-haiku-4-5",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:34:16-03:00",
+            "model_version": "haiku",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Anthropic's own Claude Haiku 4.5 announcement: ~90% of Sonnet 4.5's agentic coding performance (Augment eval), SWE-bench Verified 73.3% (50-trial avg), similar coding performance to Sonnet 4 at roughly one-third the cost and 2-5x the speed; qualitative profile across dimensions, not a per-dimension success probability.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "refactor": {
+        "class": "STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://www.anthropic.com/news/claude-haiku-4-5",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:34:16-03:00",
+            "model_version": "haiku",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Anthropic's own Claude Haiku 4.5 announcement: ~90% of Sonnet 4.5's agentic coding performance (Augment eval), SWE-bench Verified 73.3% (50-trial avg), similar coding performance to Sonnet 4 at roughly one-third the cost and 2-5x the speed; qualitative profile across dimensions, not a per-dimension success probability.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "general_engineering": {
+        "class": "STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://www.anthropic.com/news/claude-haiku-4-5",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:34:16-03:00",
+            "model_version": "haiku",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Anthropic's own Claude Haiku 4.5 announcement: ~90% of Sonnet 4.5's agentic coding performance (Augment eval), SWE-bench Verified 73.3% (50-trial avg), similar coding performance to Sonnet 4 at roughly one-third the cost and 2-5x the speed; qualitative profile across dimensions, not a per-dimension success probability.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "multi_file_feature": {
+        "class": "STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://www.anthropic.com/news/claude-haiku-4-5",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:34:16-03:00",
+            "model_version": "haiku",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Anthropic's own Claude Haiku 4.5 announcement: ~90% of Sonnet 4.5's agentic coding performance (Augment eval), SWE-bench Verified 73.3% (50-trial avg), similar coding performance to Sonnet 4 at roughly one-third the cost and 2-5x the speed; qualitative profile across dimensions, not a per-dimension success probability.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "brownfield_debugging": {
+        "class": "STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://www.anthropic.com/news/claude-haiku-4-5",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:34:16-03:00",
+            "model_version": "haiku",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Anthropic's own Claude Haiku 4.5 announcement: ~90% of Sonnet 4.5's agentic coding performance (Augment eval), SWE-bench Verified 73.3% (50-trial avg), similar coding performance to Sonnet 4 at roughly one-third the cost and 2-5x the speed; qualitative profile across dimensions, not a per-dimension success probability.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "concurrency_debugging": {
+        "class": "STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://www.anthropic.com/news/claude-haiku-4-5",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:34:16-03:00",
+            "model_version": "haiku",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Anthropic's own Claude Haiku 4.5 announcement: ~90% of Sonnet 4.5's agentic coding performance (Augment eval), SWE-bench Verified 73.3% (50-trial avg), similar coding performance to Sonnet 4 at roughly one-third the cost and 2-5x the speed; qualitative profile across dimensions, not a per-dimension success probability.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "backend": {
+        "class": "STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://www.anthropic.com/news/claude-haiku-4-5",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:34:16-03:00",
+            "model_version": "haiku",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Anthropic's own Claude Haiku 4.5 announcement: ~90% of Sonnet 4.5's agentic coding performance (Augment eval), SWE-bench Verified 73.3% (50-trial avg), similar coding performance to Sonnet 4 at roughly one-third the cost and 2-5x the speed; qualitative profile across dimensions, not a per-dimension success probability.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "frontend": {
+        "class": "STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://www.anthropic.com/news/claude-haiku-4-5",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:34:16-03:00",
+            "model_version": "haiku",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Anthropic's own Claude Haiku 4.5 announcement: ~90% of Sonnet 4.5's agentic coding performance (Augment eval), SWE-bench Verified 73.3% (50-trial avg), similar coding performance to Sonnet 4 at roughly one-third the cost and 2-5x the speed; qualitative profile across dimensions, not a per-dimension success probability.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "infra": {
+        "class": "STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://www.anthropic.com/news/claude-haiku-4-5",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:34:16-03:00",
+            "model_version": "haiku",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Anthropic's own Claude Haiku 4.5 announcement: ~90% of Sonnet 4.5's agentic coding performance (Augment eval), SWE-bench Verified 73.3% (50-trial avg), similar coding performance to Sonnet 4 at roughly one-third the cost and 2-5x the speed; qualitative profile across dimensions, not a per-dimension success probability.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "systems": {
+        "class": "STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://www.anthropic.com/news/claude-haiku-4-5",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:34:16-03:00",
+            "model_version": "haiku",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Anthropic's own Claude Haiku 4.5 announcement: ~90% of Sonnet 4.5's agentic coding performance (Augment eval), SWE-bench Verified 73.3% (50-trial avg), similar coding performance to Sonnet 4 at roughly one-third the cost and 2-5x the speed; qualitative profile across dimensions, not a per-dimension success probability.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "security": {
+        "class": "STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://www.anthropic.com/news/claude-haiku-4-5",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:34:16-03:00",
+            "model_version": "haiku",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Anthropic's own Claude Haiku 4.5 announcement: ~90% of Sonnet 4.5's agentic coding performance (Augment eval), SWE-bench Verified 73.3% (50-trial avg), similar coding performance to Sonnet 4 at roughly one-third the cost and 2-5x the speed; qualitative profile across dimensions, not a per-dimension success probability.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "autonomous_engineering": {
+        "class": "STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://www.anthropic.com/news/claude-haiku-4-5",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:34:16-03:00",
+            "model_version": "haiku",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Anthropic's own Claude Haiku 4.5 announcement: ~90% of Sonnet 4.5's agentic coding performance (Augment eval), SWE-bench Verified 73.3% (50-trial avg), similar coding performance to Sonnet 4 at roughly one-third the cost and 2-5x the speed; qualitative profile across dimensions, not a per-dimension success probability.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "long_horizon": {
+        "class": "STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://www.anthropic.com/news/claude-haiku-4-5",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:34:16-03:00",
+            "model_version": "haiku",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Anthropic's own Claude Haiku 4.5 announcement: ~90% of Sonnet 4.5's agentic coding performance (Augment eval), SWE-bench Verified 73.3% (50-trial avg), similar coding performance to Sonnet 4 at roughly one-third the cost and 2-5x the speed; qualitative profile across dimensions, not a per-dimension success probability.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "architecture": {
+        "class": "STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://www.anthropic.com/news/claude-haiku-4-5",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:34:16-03:00",
+            "model_version": "haiku",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Anthropic's own Claude Haiku 4.5 announcement: ~90% of Sonnet 4.5's agentic coding performance (Augment eval), SWE-bench Verified 73.3% (50-trial avg), similar coding performance to Sonnet 4 at roughly one-third the cost and 2-5x the speed; qualitative profile across dimensions, not a per-dimension success probability.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "critical_review": {
+        "class": "STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://www.anthropic.com/news/claude-haiku-4-5",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:34:16-03:00",
+            "model_version": "haiku",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Anthropic's own Claude Haiku 4.5 announcement: ~90% of Sonnet 4.5's agentic coding performance (Augment eval), SWE-bench Verified 73.3% (50-trial avg), similar coding performance to Sonnet 4 at roughly one-third the cost and 2-5x the speed; qualitative profile across dimensions, not a per-dimension success probability.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "tool_use": {
+        "class": "VERY_STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://www.anthropic.com/news/claude-haiku-4-5",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:34:16-03:00",
+            "model_version": "haiku",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Anthropic's own Claude Haiku 4.5 announcement: ~90% of Sonnet 4.5's agentic coding performance (Augment eval), SWE-bench Verified 73.3% (50-trial avg), similar coding performance to Sonnet 4 at roughly one-third the cost and 2-5x the speed; qualitative profile across dimensions, not a per-dimension success probability.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "repo_retrieval": {
+        "class": "STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://www.anthropic.com/news/claude-haiku-4-5",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:34:16-03:00",
+            "model_version": "haiku",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Anthropic's own Claude Haiku 4.5 announcement: ~90% of Sonnet 4.5's agentic coding performance (Augment eval), SWE-bench Verified 73.3% (50-trial avg), similar coding performance to Sonnet 4 at roughly one-third the cost and 2-5x the speed; qualitative profile across dimensions, not a per-dimension success probability.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "long_context": {
+        "class": "STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://www.anthropic.com/news/claude-haiku-4-5",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:34:16-03:00",
+            "model_version": "haiku",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Anthropic's own Claude Haiku 4.5 announcement: ~90% of Sonnet 4.5's agentic coding performance (Augment eval), SWE-bench Verified 73.3% (50-trial avg), similar coding performance to Sonnet 4 at roughly one-third the cost and 2-5x the speed; qualitative profile across dimensions, not a per-dimension success probability.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "multimodal": {
+        "class": "STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://www.anthropic.com/news/claude-haiku-4-5",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:34:16-03:00",
+            "model_version": "haiku",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Anthropic's own Claude Haiku 4.5 announcement: ~90% of Sonnet 4.5's agentic coding performance (Augment eval), SWE-bench Verified 73.3% (50-trial avg), similar coding performance to Sonnet 4 at roughly one-third the cost and 2-5x the speed; qualitative profile across dimensions, not a per-dimension success probability.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      }
+    }
+  },
+  "claude-sonnet-4-6": {
+    "model_version": "claude",
+    "capabilities": {
+      "targeted_edit": {
+        "class": "VERY_STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://www.anthropic.com/news/claude-sonnet-4-6",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:34:16-03:00",
+            "model_version": "claude",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Anthropic's own Claude Sonnet 4.6 announcement: full upgrade across coding, computer use, long-context reasoning, agent planning, and knowledge work; SWE-bench Verified 80.2%, preferred over Sonnet 4.5 in ~70% of head-to-head developer evaluations; qualitative profile across dimensions, not a per-dimension success probability.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "mechanical_tool_work": {
+        "class": "VERY_STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://www.anthropic.com/news/claude-sonnet-4-6",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:34:16-03:00",
+            "model_version": "claude",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Anthropic's own Claude Sonnet 4.6 announcement: full upgrade across coding, computer use, long-context reasoning, agent planning, and knowledge work; SWE-bench Verified 80.2%, preferred over Sonnet 4.5 in ~70% of head-to-head developer evaluations; qualitative profile across dimensions, not a per-dimension success probability.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "test_generation": {
+        "class": "VERY_STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://www.anthropic.com/news/claude-sonnet-4-6",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:34:16-03:00",
+            "model_version": "claude",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Anthropic's own Claude Sonnet 4.6 announcement: full upgrade across coding, computer use, long-context reasoning, agent planning, and knowledge work; SWE-bench Verified 80.2%, preferred over Sonnet 4.5 in ~70% of head-to-head developer evaluations; qualitative profile across dimensions, not a per-dimension success probability.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "refactor": {
+        "class": "VERY_STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://www.anthropic.com/news/claude-sonnet-4-6",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:34:16-03:00",
+            "model_version": "claude",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Anthropic's own Claude Sonnet 4.6 announcement: full upgrade across coding, computer use, long-context reasoning, agent planning, and knowledge work; SWE-bench Verified 80.2%, preferred over Sonnet 4.5 in ~70% of head-to-head developer evaluations; qualitative profile across dimensions, not a per-dimension success probability.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "general_engineering": {
+        "class": "VERY_STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://www.anthropic.com/news/claude-sonnet-4-6",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:34:16-03:00",
+            "model_version": "claude",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Anthropic's own Claude Sonnet 4.6 announcement: full upgrade across coding, computer use, long-context reasoning, agent planning, and knowledge work; SWE-bench Verified 80.2%, preferred over Sonnet 4.5 in ~70% of head-to-head developer evaluations; qualitative profile across dimensions, not a per-dimension success probability.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "multi_file_feature": {
+        "class": "VERY_STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://www.anthropic.com/news/claude-sonnet-4-6",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:34:16-03:00",
+            "model_version": "claude",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Anthropic's own Claude Sonnet 4.6 announcement: full upgrade across coding, computer use, long-context reasoning, agent planning, and knowledge work; SWE-bench Verified 80.2%, preferred over Sonnet 4.5 in ~70% of head-to-head developer evaluations; qualitative profile across dimensions, not a per-dimension success probability.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "brownfield_debugging": {
+        "class": "VERY_STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://www.anthropic.com/news/claude-sonnet-4-6",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:34:16-03:00",
+            "model_version": "claude",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Anthropic's own Claude Sonnet 4.6 announcement: full upgrade across coding, computer use, long-context reasoning, agent planning, and knowledge work; SWE-bench Verified 80.2%, preferred over Sonnet 4.5 in ~70% of head-to-head developer evaluations; qualitative profile across dimensions, not a per-dimension success probability.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "concurrency_debugging": {
+        "class": "VERY_STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://www.anthropic.com/news/claude-sonnet-4-6",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:34:16-03:00",
+            "model_version": "claude",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Anthropic's own Claude Sonnet 4.6 announcement: full upgrade across coding, computer use, long-context reasoning, agent planning, and knowledge work; SWE-bench Verified 80.2%, preferred over Sonnet 4.5 in ~70% of head-to-head developer evaluations; qualitative profile across dimensions, not a per-dimension success probability.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "backend": {
+        "class": "VERY_STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://www.anthropic.com/news/claude-sonnet-4-6",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:34:16-03:00",
+            "model_version": "claude",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Anthropic's own Claude Sonnet 4.6 announcement: full upgrade across coding, computer use, long-context reasoning, agent planning, and knowledge work; SWE-bench Verified 80.2%, preferred over Sonnet 4.5 in ~70% of head-to-head developer evaluations; qualitative profile across dimensions, not a per-dimension success probability.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "frontend": {
+        "class": "VERY_STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://www.anthropic.com/news/claude-sonnet-4-6",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:34:16-03:00",
+            "model_version": "claude",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Anthropic's own Claude Sonnet 4.6 announcement: full upgrade across coding, computer use, long-context reasoning, agent planning, and knowledge work; SWE-bench Verified 80.2%, preferred over Sonnet 4.5 in ~70% of head-to-head developer evaluations; qualitative profile across dimensions, not a per-dimension success probability.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "infra": {
+        "class": "VERY_STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://www.anthropic.com/news/claude-sonnet-4-6",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:34:16-03:00",
+            "model_version": "claude",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Anthropic's own Claude Sonnet 4.6 announcement: full upgrade across coding, computer use, long-context reasoning, agent planning, and knowledge work; SWE-bench Verified 80.2%, preferred over Sonnet 4.5 in ~70% of head-to-head developer evaluations; qualitative profile across dimensions, not a per-dimension success probability.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "systems": {
+        "class": "VERY_STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://www.anthropic.com/news/claude-sonnet-4-6",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:34:16-03:00",
+            "model_version": "claude",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Anthropic's own Claude Sonnet 4.6 announcement: full upgrade across coding, computer use, long-context reasoning, agent planning, and knowledge work; SWE-bench Verified 80.2%, preferred over Sonnet 4.5 in ~70% of head-to-head developer evaluations; qualitative profile across dimensions, not a per-dimension success probability.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "security": {
+        "class": "VERY_STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://www.anthropic.com/news/claude-sonnet-4-6",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:34:16-03:00",
+            "model_version": "claude",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Anthropic's own Claude Sonnet 4.6 announcement: full upgrade across coding, computer use, long-context reasoning, agent planning, and knowledge work; SWE-bench Verified 80.2%, preferred over Sonnet 4.5 in ~70% of head-to-head developer evaluations; qualitative profile across dimensions, not a per-dimension success probability.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "autonomous_engineering": {
+        "class": "VERY_STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://www.anthropic.com/news/claude-sonnet-4-6",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:34:16-03:00",
+            "model_version": "claude",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Anthropic's own Claude Sonnet 4.6 announcement: full upgrade across coding, computer use, long-context reasoning, agent planning, and knowledge work; SWE-bench Verified 80.2%, preferred over Sonnet 4.5 in ~70% of head-to-head developer evaluations; qualitative profile across dimensions, not a per-dimension success probability.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "long_horizon": {
+        "class": "VERY_STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://www.anthropic.com/news/claude-sonnet-4-6",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:34:16-03:00",
+            "model_version": "claude",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Anthropic's own Claude Sonnet 4.6 announcement: full upgrade across coding, computer use, long-context reasoning, agent planning, and knowledge work; SWE-bench Verified 80.2%, preferred over Sonnet 4.5 in ~70% of head-to-head developer evaluations; qualitative profile across dimensions, not a per-dimension success probability.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "architecture": {
+        "class": "VERY_STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://www.anthropic.com/news/claude-sonnet-4-6",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:34:16-03:00",
+            "model_version": "claude",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Anthropic's own Claude Sonnet 4.6 announcement: full upgrade across coding, computer use, long-context reasoning, agent planning, and knowledge work; SWE-bench Verified 80.2%, preferred over Sonnet 4.5 in ~70% of head-to-head developer evaluations; qualitative profile across dimensions, not a per-dimension success probability.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "critical_review": {
+        "class": "VERY_STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://www.anthropic.com/news/claude-sonnet-4-6",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:34:16-03:00",
+            "model_version": "claude",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Anthropic's own Claude Sonnet 4.6 announcement: full upgrade across coding, computer use, long-context reasoning, agent planning, and knowledge work; SWE-bench Verified 80.2%, preferred over Sonnet 4.5 in ~70% of head-to-head developer evaluations; qualitative profile across dimensions, not a per-dimension success probability.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "tool_use": {
+        "class": "VERY_STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://www.anthropic.com/news/claude-sonnet-4-6",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:34:16-03:00",
+            "model_version": "claude",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Anthropic's own Claude Sonnet 4.6 announcement: full upgrade across coding, computer use, long-context reasoning, agent planning, and knowledge work; SWE-bench Verified 80.2%, preferred over Sonnet 4.5 in ~70% of head-to-head developer evaluations; qualitative profile across dimensions, not a per-dimension success probability.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "repo_retrieval": {
+        "class": "VERY_STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://www.anthropic.com/news/claude-sonnet-4-6",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:34:16-03:00",
+            "model_version": "claude",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Anthropic's own Claude Sonnet 4.6 announcement: full upgrade across coding, computer use, long-context reasoning, agent planning, and knowledge work; SWE-bench Verified 80.2%, preferred over Sonnet 4.5 in ~70% of head-to-head developer evaluations; qualitative profile across dimensions, not a per-dimension success probability.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "long_context": {
+        "class": "VERY_STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://www.anthropic.com/news/claude-sonnet-4-6",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:34:16-03:00",
+            "model_version": "claude",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Anthropic's own Claude Sonnet 4.6 announcement: full upgrade across coding, computer use, long-context reasoning, agent planning, and knowledge work; SWE-bench Verified 80.2%, preferred over Sonnet 4.5 in ~70% of head-to-head developer evaluations; qualitative profile across dimensions, not a per-dimension success probability.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "multimodal": {
+        "class": "VERY_STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://www.anthropic.com/news/claude-sonnet-4-6",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:34:16-03:00",
+            "model_version": "claude",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Anthropic's own Claude Sonnet 4.6 announcement: full upgrade across coding, computer use, long-context reasoning, agent planning, and knowledge work; SWE-bench Verified 80.2%, preferred over Sonnet 4.5 in ~70% of head-to-head developer evaluations; qualitative profile across dimensions, not a per-dimension success probability.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      }
+    }
+  },
+  "claude-opus-4-6-thinking": {
+    "model_version": "claude",
+    "capabilities": {
+      "targeted_edit": {
+        "class": "VERY_STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://www.anthropic.com/news/claude-opus-4-6",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:34:16-03:00",
+            "model_version": "claude",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Anthropic's own Claude Opus 4.6 announcement: highest score on the Terminal-Bench 2.0 agentic coding evaluation, SWE-bench Verified 79.3% (25-trial avg), plans more carefully and sustains agentic tasks longer with better self-review in large codebases; qualitative profile across dimensions, not a per-dimension success probability.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "mechanical_tool_work": {
+        "class": "VERY_STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://www.anthropic.com/news/claude-opus-4-6",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:34:16-03:00",
+            "model_version": "claude",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Anthropic's own Claude Opus 4.6 announcement: highest score on the Terminal-Bench 2.0 agentic coding evaluation, SWE-bench Verified 79.3% (25-trial avg), plans more carefully and sustains agentic tasks longer with better self-review in large codebases; qualitative profile across dimensions, not a per-dimension success probability.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "test_generation": {
+        "class": "VERY_STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://www.anthropic.com/news/claude-opus-4-6",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:34:16-03:00",
+            "model_version": "claude",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Anthropic's own Claude Opus 4.6 announcement: highest score on the Terminal-Bench 2.0 agentic coding evaluation, SWE-bench Verified 79.3% (25-trial avg), plans more carefully and sustains agentic tasks longer with better self-review in large codebases; qualitative profile across dimensions, not a per-dimension success probability.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "refactor": {
+        "class": "VERY_STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://www.anthropic.com/news/claude-opus-4-6",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:34:16-03:00",
+            "model_version": "claude",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Anthropic's own Claude Opus 4.6 announcement: highest score on the Terminal-Bench 2.0 agentic coding evaluation, SWE-bench Verified 79.3% (25-trial avg), plans more carefully and sustains agentic tasks longer with better self-review in large codebases; qualitative profile across dimensions, not a per-dimension success probability.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "general_engineering": {
+        "class": "VERY_STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://www.anthropic.com/news/claude-opus-4-6",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:34:16-03:00",
+            "model_version": "claude",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Anthropic's own Claude Opus 4.6 announcement: highest score on the Terminal-Bench 2.0 agentic coding evaluation, SWE-bench Verified 79.3% (25-trial avg), plans more carefully and sustains agentic tasks longer with better self-review in large codebases; qualitative profile across dimensions, not a per-dimension success probability.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "multi_file_feature": {
+        "class": "VERY_STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://www.anthropic.com/news/claude-opus-4-6",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:34:16-03:00",
+            "model_version": "claude",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Anthropic's own Claude Opus 4.6 announcement: highest score on the Terminal-Bench 2.0 agentic coding evaluation, SWE-bench Verified 79.3% (25-trial avg), plans more carefully and sustains agentic tasks longer with better self-review in large codebases; qualitative profile across dimensions, not a per-dimension success probability.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "brownfield_debugging": {
+        "class": "VERY_STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://www.anthropic.com/news/claude-opus-4-6",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:34:16-03:00",
+            "model_version": "claude",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Anthropic's own Claude Opus 4.6 announcement: highest score on the Terminal-Bench 2.0 agentic coding evaluation, SWE-bench Verified 79.3% (25-trial avg), plans more carefully and sustains agentic tasks longer with better self-review in large codebases; qualitative profile across dimensions, not a per-dimension success probability.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "concurrency_debugging": {
+        "class": "VERY_STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://www.anthropic.com/news/claude-opus-4-6",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:34:16-03:00",
+            "model_version": "claude",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Anthropic's own Claude Opus 4.6 announcement: highest score on the Terminal-Bench 2.0 agentic coding evaluation, SWE-bench Verified 79.3% (25-trial avg), plans more carefully and sustains agentic tasks longer with better self-review in large codebases; qualitative profile across dimensions, not a per-dimension success probability.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "backend": {
+        "class": "VERY_STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://www.anthropic.com/news/claude-opus-4-6",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:34:16-03:00",
+            "model_version": "claude",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Anthropic's own Claude Opus 4.6 announcement: highest score on the Terminal-Bench 2.0 agentic coding evaluation, SWE-bench Verified 79.3% (25-trial avg), plans more carefully and sustains agentic tasks longer with better self-review in large codebases; qualitative profile across dimensions, not a per-dimension success probability.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "frontend": {
+        "class": "VERY_STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://www.anthropic.com/news/claude-opus-4-6",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:34:16-03:00",
+            "model_version": "claude",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Anthropic's own Claude Opus 4.6 announcement: highest score on the Terminal-Bench 2.0 agentic coding evaluation, SWE-bench Verified 79.3% (25-trial avg), plans more carefully and sustains agentic tasks longer with better self-review in large codebases; qualitative profile across dimensions, not a per-dimension success probability.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "infra": {
+        "class": "VERY_STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://www.anthropic.com/news/claude-opus-4-6",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:34:16-03:00",
+            "model_version": "claude",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Anthropic's own Claude Opus 4.6 announcement: highest score on the Terminal-Bench 2.0 agentic coding evaluation, SWE-bench Verified 79.3% (25-trial avg), plans more carefully and sustains agentic tasks longer with better self-review in large codebases; qualitative profile across dimensions, not a per-dimension success probability.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "systems": {
+        "class": "VERY_STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://www.anthropic.com/news/claude-opus-4-6",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:34:16-03:00",
+            "model_version": "claude",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Anthropic's own Claude Opus 4.6 announcement: highest score on the Terminal-Bench 2.0 agentic coding evaluation, SWE-bench Verified 79.3% (25-trial avg), plans more carefully and sustains agentic tasks longer with better self-review in large codebases; qualitative profile across dimensions, not a per-dimension success probability.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "security": {
+        "class": "VERY_STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://www.anthropic.com/news/claude-opus-4-6",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:34:16-03:00",
+            "model_version": "claude",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Anthropic's own Claude Opus 4.6 announcement: highest score on the Terminal-Bench 2.0 agentic coding evaluation, SWE-bench Verified 79.3% (25-trial avg), plans more carefully and sustains agentic tasks longer with better self-review in large codebases; qualitative profile across dimensions, not a per-dimension success probability.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "autonomous_engineering": {
+        "class": "VERY_STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://www.anthropic.com/news/claude-opus-4-6",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:34:16-03:00",
+            "model_version": "claude",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Anthropic's own Claude Opus 4.6 announcement: highest score on the Terminal-Bench 2.0 agentic coding evaluation, SWE-bench Verified 79.3% (25-trial avg), plans more carefully and sustains agentic tasks longer with better self-review in large codebases; qualitative profile across dimensions, not a per-dimension success probability.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "long_horizon": {
+        "class": "VERY_STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://www.anthropic.com/news/claude-opus-4-6",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:34:16-03:00",
+            "model_version": "claude",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Anthropic's own Claude Opus 4.6 announcement: highest score on the Terminal-Bench 2.0 agentic coding evaluation, SWE-bench Verified 79.3% (25-trial avg), plans more carefully and sustains agentic tasks longer with better self-review in large codebases; qualitative profile across dimensions, not a per-dimension success probability.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "architecture": {
+        "class": "VERY_STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://www.anthropic.com/news/claude-opus-4-6",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:34:16-03:00",
+            "model_version": "claude",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Anthropic's own Claude Opus 4.6 announcement: highest score on the Terminal-Bench 2.0 agentic coding evaluation, SWE-bench Verified 79.3% (25-trial avg), plans more carefully and sustains agentic tasks longer with better self-review in large codebases; qualitative profile across dimensions, not a per-dimension success probability.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "critical_review": {
+        "class": "VERY_STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://www.anthropic.com/news/claude-opus-4-6",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:34:16-03:00",
+            "model_version": "claude",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Anthropic's own Claude Opus 4.6 announcement: highest score on the Terminal-Bench 2.0 agentic coding evaluation, SWE-bench Verified 79.3% (25-trial avg), plans more carefully and sustains agentic tasks longer with better self-review in large codebases; qualitative profile across dimensions, not a per-dimension success probability.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "tool_use": {
+        "class": "VERY_STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://www.anthropic.com/news/claude-opus-4-6",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:34:16-03:00",
+            "model_version": "claude",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Anthropic's own Claude Opus 4.6 announcement: highest score on the Terminal-Bench 2.0 agentic coding evaluation, SWE-bench Verified 79.3% (25-trial avg), plans more carefully and sustains agentic tasks longer with better self-review in large codebases; qualitative profile across dimensions, not a per-dimension success probability.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "repo_retrieval": {
+        "class": "VERY_STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://www.anthropic.com/news/claude-opus-4-6",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:34:16-03:00",
+            "model_version": "claude",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Anthropic's own Claude Opus 4.6 announcement: highest score on the Terminal-Bench 2.0 agentic coding evaluation, SWE-bench Verified 79.3% (25-trial avg), plans more carefully and sustains agentic tasks longer with better self-review in large codebases; qualitative profile across dimensions, not a per-dimension success probability.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "long_context": {
+        "class": "VERY_STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://www.anthropic.com/news/claude-opus-4-6",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:34:16-03:00",
+            "model_version": "claude",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Anthropic's own Claude Opus 4.6 announcement: highest score on the Terminal-Bench 2.0 agentic coding evaluation, SWE-bench Verified 79.3% (25-trial avg), plans more carefully and sustains agentic tasks longer with better self-review in large codebases; qualitative profile across dimensions, not a per-dimension success probability.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "multimodal": {
+        "class": "VERY_STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://www.anthropic.com/news/claude-opus-4-6",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:34:16-03:00",
+            "model_version": "claude",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Anthropic's own Claude Opus 4.6 announcement: highest score on the Terminal-Bench 2.0 agentic coding evaluation, SWE-bench Verified 79.3% (25-trial avg), plans more carefully and sustains agentic tasks longer with better self-review in large codebases; qualitative profile across dimensions, not a per-dimension success probability.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      }
+    }
+  }
+}
