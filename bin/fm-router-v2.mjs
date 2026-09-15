@@ -6,18 +6,10 @@ import { fileURLToPath } from 'node:url';
 import { normalizeQuotaAxiSnapshot } from './fm-quota-normalize.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const FM_HOME = path.resolve(process.env.FM_HOME || ROOT);
-const homePath = (relPath) => path.join(FM_HOME, relPath);
+const currentFmHome = () => path.resolve(process.env.FM_HOME || ROOT);
+const homePath = (relPath) => path.join(currentFmHome(), relPath);
+const getExecutionsLogPath = () => homePath('data/routing-executions.jsonl');
 
-const REGISTRY_PATH = homePath('config/model-registry.json');
-const POLICY_PATH = homePath('config/routing-policy.json');
-const PRIORS_PATH = homePath('config/routing-priors.json');
-const DISPATCH_PATH = homePath('config/crew-dispatch.json');
-const DATA_POLICY_PATH = homePath('config/data-policy.json');
-const QUOTA_MAP_PATH = homePath('data/quota-pool-map.json');
-const LEARNED_ROUTING_PATH = homePath('data/learned-routing.json');
-const EXECUTIONS_LOG_PATH = homePath('data/routing-executions.jsonl');
-const COMPILED_ROUTES_PATH = homePath('data/provider-catalogs/compiled-route-targets.json');
 const OPENCODE_QUOTA_SCRIPT_PATH = path.join(ROOT, 'bin', 'fm-opencode-quota.mjs');
 
 function setPoolWindowsFresh(pool, fresh) {
@@ -39,7 +31,7 @@ function readOpenCodeGoQuota() {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'ignore'],
     timeout: 10000,
-    env: { ...process.env, FM_HOME }
+    env: { ...process.env, FM_HOME: currentFmHome() }
   });
   const quota = JSON.parse(output);
   if (!quota || typeof quota !== 'object' || Array.isArray(quota)) {
@@ -79,19 +71,27 @@ function unknownQuotaMap(quotaMap, reason) {
 }
 
 export function loadConfigs() {
-  const registry = readJson(REGISTRY_PATH, 'model registry');
-  const policy = readJson(POLICY_PATH, 'routing policy');
-  const priors = readJson(PRIORS_PATH, 'routing priors');
-  const dataPolicy = readJson(DATA_POLICY_PATH, 'data policy');
-  const quotaMapRaw = readJson(QUOTA_MAP_PATH, 'quota pool map');
-  const quotaMap = generatedStateFresh(QUOTA_MAP_PATH, quotaMapRaw)
+  const registryPath = homePath('config/model-registry.json');
+  const policyPath = homePath('config/routing-policy.json');
+  const priorsPath = homePath('config/routing-priors.json');
+  const dataPolicyPath = homePath('config/data-policy.json');
+  const quotaMapPath = homePath('data/quota-pool-map.json');
+  const learnedRoutingPath = homePath('data/learned-routing.json');
+  const compiledRoutesPath = homePath('data/provider-catalogs/compiled-route-targets.json');
+
+  const registry = readJson(registryPath, 'model registry');
+  const policy = readJson(policyPath, 'routing policy');
+  const priors = readJson(priorsPath, 'routing priors');
+  const dataPolicy = readJson(dataPolicyPath, 'data policy');
+  const quotaMapRaw = readJson(quotaMapPath, 'quota pool map');
+  const quotaMap = generatedStateFresh(quotaMapPath, quotaMapRaw)
     ? quotaMapRaw
     : unknownQuotaMap(quotaMapRaw, 'quota pool map is stale');
-  const learned = fs.existsSync(LEARNED_ROUTING_PATH)
-    ? readJson(LEARNED_ROUTING_PATH, 'learned routing')
+  const learned = fs.existsSync(learnedRoutingPath)
+    ? readJson(learnedRoutingPath, 'learned routing')
     : null;
-  const compiledRoutes = fs.existsSync(COMPILED_ROUTES_PATH)
-    ? (generatedStateFresh(COMPILED_ROUTES_PATH) ? readJson(COMPILED_ROUTES_PATH, 'compiled route targets') : [])
+  const compiledRoutes = fs.existsSync(compiledRoutesPath)
+    ? (generatedStateFresh(compiledRoutesPath) ? readJson(compiledRoutesPath, 'compiled route targets') : [])
     : [];
   return { registry, policy, priors, dataPolicy, quotaMap, learned, compiledRoutes };
 }
@@ -598,19 +598,208 @@ export function scoreAndSelectRoute({ role, dataClass, targetEffort = null, quot
       score: s.finalScore,
       effort_fit: s.effortFitScore,
       note: s.arbitrageNote
+    })),
+    liveQuotaPools: liveQuota,
+    allCandidates: scored.map(s => ({
+      route_id: s.route.route_id,
+      harness: s.route.harness,
+      model: s.route.resolved_runtime_model,
+      effort: s.route.reasoning_effort,
+      score: s.finalScore
     }))
   };
 }
 
 export function logTelemetry(record) {
+  const routeExecId = record.route_execution_id || record.execution_id || `rex-${Date.now()}-${Math.floor(Math.random()*1000)}`;
+  const parentExecId = record.parent_route_execution_id || routeExecId;
   const entry = {
-    execution_id: record.execution_id || `exec-${Date.now()}-${Math.floor(Math.random()*1000)}`,
+    route_execution_id: routeExecId,
+    parent_route_execution_id: parentExecId,
+    execution_id: routeExecId,
     timestamp: record.timestamp || new Date().toISOString(),
-    ...record
+    ...record,
+    route_execution_id: routeExecId,
+    parent_route_execution_id: parentExecId,
+    execution_id: routeExecId
   };
-  fs.mkdirSync(path.dirname(EXECUTIONS_LOG_PATH), { recursive: true });
-  fs.appendFileSync(EXECUTIONS_LOG_PATH, JSON.stringify(entry) + '\n');
+  const logPath = getExecutionsLogPath();
+  fs.mkdirSync(path.dirname(logPath), { recursive: true });
+  fs.appendFileSync(logPath, JSON.stringify(entry) + '\n');
   return entry;
+}
+
+export function ingressDispatchStarted({
+  taskId,
+  routeExecutionId = null,
+  parentExecutionId = null,
+  attemptNumber = 1,
+  retryCount = 0,
+  path = 'A',
+  taskClassification = null,
+  dataClass = 'LEGACY_UNCLASSIFIED',
+  candidateRoutes = null,
+  candidateRouteSetMarker = null,
+  routeDecision = null,
+  quotaSnapshotBefore = null,
+  selectedRouteId = null,
+  selectedHarness = null,
+  selectedModel = null,
+  selectedEffort = null,
+  diagnosticConstraint = null,
+  dispatchType = 'task_dispatch',
+  extra = {}
+}) {
+  const execId = routeExecutionId || `rex-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+  const rootId = parentExecutionId || execId;
+  const now = new Date().toISOString();
+
+  let quotaBefore = quotaSnapshotBefore;
+  if (!quotaBefore) {
+    try {
+      quotaBefore = resolveLiveQuotaPools({ useLiveAxi: true });
+    } catch (_) {
+      quotaBefore = null;
+    }
+  }
+
+  const record = {
+    route_execution_id: execId,
+    parent_route_execution_id: rootId,
+    execution_id: execId,
+    attempt_number: attemptNumber,
+    retry_count: retryCount,
+    task_id: taskId,
+    dispatch_path: path,
+    dispatch_type: dispatchType,
+    task_classification: taskClassification || 'general_engineer',
+    requested_role: taskClassification || 'general_engineer',
+    data_class: dataClass,
+    candidate_routes: candidateRoutes,
+    candidate_route_set_marker: candidateRouteSetMarker,
+    route_decision: routeDecision,
+    quota_snapshot_before: quotaBefore,
+    selected_route_id: selectedRouteId,
+    selected_harness: selectedHarness,
+    selected_model: selectedModel,
+    selected_effort: selectedEffort,
+    actual_harness: null,
+    actual_model: null,
+    actual_effort: null,
+    ...(diagnosticConstraint ? { diagnostic_constraint: diagnosticConstraint } : {}),
+    dispatch_status: 'started',
+    lifecycle_state: 'SELECTED',
+    started_at: now,
+    timestamp: now,
+    ...extra
+  };
+
+  return logTelemetry(record);
+}
+
+export function ingressDispatchDispatched({
+  taskId,
+  routeExecutionId,
+  parentExecutionId = null,
+  attemptNumber = 1,
+  retryCount = 0,
+  path = 'A',
+  selectedRouteId = null,
+  selectedHarness = null,
+  selectedModel = null,
+  selectedEffort = null,
+  actualHarness = null,
+  actualModel = null,
+  actualEffort = null,
+  workerId = null,
+  worktree = null,
+  pid = null,
+  backend = null,
+  dispatchType = 'task_dispatch',
+  extra = {}
+}) {
+  const rootId = parentExecutionId || routeExecutionId;
+  const now = new Date().toISOString();
+
+  const record = {
+    route_execution_id: routeExecutionId,
+    parent_route_execution_id: rootId,
+    execution_id: routeExecutionId,
+    attempt_number: attemptNumber,
+    retry_count: retryCount,
+    task_id: taskId,
+    dispatch_path: path,
+    dispatch_type: dispatchType,
+    selected_route_id: selectedRouteId,
+    selected_harness: selectedHarness,
+    selected_model: selectedModel,
+    selected_effort: selectedEffort,
+    actual_harness: actualHarness,
+    actual_model: actualModel,
+    actual_effort: actualEffort,
+    herdr_worker_id: workerId || 'unknown',
+    herdr_task_id: taskId,
+    worktree: worktree || null,
+    pid: pid ? Number(pid) : null,
+    backend: backend || null,
+    dispatch_match: true,
+    dispatch_status: 'dispatched',
+    lifecycle_state: 'DISPATCHED',
+    dispatched_at: now,
+    timestamp: now,
+    ...extra
+  };
+
+  return logTelemetry(record);
+}
+
+export function ingressDispatchFailed({
+  taskId,
+  routeExecutionId,
+  parentExecutionId = null,
+  attemptNumber = 1,
+  retryCount = 0,
+  path = 'A',
+  selectedRouteId = null,
+  selectedHarness = null,
+  selectedModel = null,
+  selectedEffort = null,
+  errorCategory = 'harness_launch_failure',
+  errorMessage = '',
+  dispatchType = 'task_dispatch',
+  extra = {}
+}) {
+  const rootId = parentExecutionId || routeExecutionId;
+  const now = new Date().toISOString();
+
+  const record = {
+    route_execution_id: routeExecutionId,
+    parent_route_execution_id: rootId,
+    execution_id: routeExecutionId,
+    attempt_number: attemptNumber,
+    retry_count: retryCount,
+    task_id: taskId,
+    dispatch_path: path,
+    dispatch_type: dispatchType,
+    selected_route_id: selectedRouteId,
+    selected_harness: selectedHarness,
+    selected_model: selectedModel,
+    selected_effort: selectedEffort,
+    actual_harness: null,
+    actual_model: null,
+    actual_effort: null,
+    dispatch_status: 'launch_failed',
+    dispatch_match: false,
+    terminal_state: 'LAUNCH_FAILED',
+    lifecycle_state: 'FAILED',
+    error_category: errorCategory,
+    error_message: String(errorMessage).slice(0, 500),
+    completed_at: now,
+    timestamp: now,
+    ...extra
+  };
+
+  return logTelemetry(record);
 }
 
 export function dispatchThroughHerdr({
@@ -621,14 +810,20 @@ export function dispatchThroughHerdr({
   intent = '',
   spec = '',
   scout = true,
-  projectDir = FM_HOME,
+  projectDir = null,
   repoName = 'captain-workspace',
   mode = 'local-only',
   yolo = 'off',
   excludeRoutes = [],
   diagnosticConstraint = null,
   quotaOverrides = null,
-  spawnRunner = null
+  spawnRunner = null,
+  routeExecutionId = null,
+  parentExecutionId = null,
+  attemptNumber = 1,
+  retryCount = 0,
+  useLiveAxi = true,
+  backend = 'herdr'
 }) {
   if (!dataClass || dataClass === 'UNKNOWN') {
     throw new Error('dispatchThroughHerdr: dataClass is required and must not be empty or UNKNOWN (fail-closed policy)');
@@ -643,7 +838,8 @@ export function dispatchThroughHerdr({
     dataClass,
     targetEffort,
     excludeRoutes: effectiveExcludes,
-    quotaOverrides
+    quotaOverrides,
+    useLiveAxi
   });
   const selectedRoute = decision.selectedRoute;
   const briefPath = homePath(path.join('data', taskId, 'brief.md'));
@@ -651,22 +847,39 @@ export function dispatchThroughHerdr({
     throw new Error(`dispatchThroughHerdr: task ${taskId} must be provisioned by the task intake owner; missing brief at ${briefPath}`);
   }
 
-  const execId = `exec-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
-  logTelemetry({
-    execution_id: execId,
-    task_id: taskId,
-    requested_role: role,
-    data_class: dataClass,
-    ...(diagnosticConstraint ? { diagnostic_constraint: diagnosticConstraint } : {}),
-    selected_route_id: selectedRoute.route_id,
-    selected_harness: selectedRoute.harness,
-    selected_model: selectedRoute.resolved_runtime_model,
-    selected_effort: selectedRoute.reasoning_effort,
-    dispatch_status: 'started',
-    started_at: new Date().toISOString()
+  const execId = routeExecutionId || `rex-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+  const rootExecId = parentExecutionId || execId;
+
+  ingressDispatchStarted({
+    taskId,
+    routeExecutionId: execId,
+    parentExecutionId: rootExecId,
+    attemptNumber,
+    retryCount,
+    path: 'A',
+    taskClassification: role,
+    dataClass,
+    candidateRoutes: decision.allCandidates || decision.topCandidates || [],
+    candidateRouteSetMarker: null,
+    routeDecision: {
+      decision_type: 'router_v2',
+      route_id: selectedRoute.route_id,
+      harness: selectedRoute.harness,
+      model: selectedRoute.resolved_runtime_model,
+      effort: selectedRoute.reasoning_effort,
+      score: decision.finalScore,
+      arbitrage_reason: decision.arbitrageReason
+    },
+    quotaSnapshotBefore: decision.liveQuotaPools,
+    selectedRouteId: selectedRoute.route_id,
+    selectedHarness: selectedRoute.harness,
+    selectedModel: selectedRoute.resolved_runtime_model,
+    selectedEffort: selectedRoute.reasoning_effort,
+    diagnosticConstraint
   });
 
-  const spawnArgs = [path.join(ROOT, 'bin', 'fm-spawn.sh'), taskId, projectDir];
+  const effectiveProjectDir = projectDir || currentFmHome();
+  const spawnArgs = [path.join(ROOT, 'bin', 'fm-spawn.sh'), taskId, effectiveProjectDir];
   if (scout) {
     spawnArgs.push('--scout');
   } else {
@@ -677,24 +890,26 @@ export function dispatchThroughHerdr({
   spawnArgs.push('--role', role);
   spawnArgs.push('--data-class', dataClass);
   spawnArgs.push('--route-id', selectedRoute.route_id);
+  spawnArgs.push('--route-execution-id', execId);
+  spawnArgs.push('--parent-execution-id', rootExecId);
   if (selectedRoute.reasoning_effort) {
     const effort = selectedRoute.reasoning_effort === 'ultra' ? 'max' : selectedRoute.reasoning_effort;
     if (['low', 'medium', 'high', 'xhigh', 'max'].includes(effort)) {
       spawnArgs.push('--effort', effort);
     }
   }
-  spawnArgs.push('--backend', 'herdr');
+  spawnArgs.push('--backend', backend);
 
   let spawnResult;
   if (spawnRunner) {
-    spawnResult = spawnRunner(spawnArgs, { env: { ...process.env, FM_HOME }, taskId, selectedRoute });
+    spawnResult = spawnRunner(spawnArgs, { env: { ...process.env, FM_HOME: currentFmHome() }, taskId, selectedRoute });
   } else {
     try {
       const stdout = execFileSync('bash', spawnArgs, {
         encoding: 'utf8',
         stdio: 'pipe',
         timeout: 120000,
-        env: { ...process.env, FM_HOME }
+        env: { ...process.env, FM_HOME: currentFmHome() }
       });
       spawnResult = { success: true, output: stdout };
     } catch (error) {
@@ -707,43 +922,55 @@ export function dispatchThroughHerdr({
   }
 
   if (!spawnResult?.success) {
-    logTelemetry({
-      execution_id: execId,
-      task_id: taskId,
-      requested_role: role,
-      data_class: dataClass,
-      selected_route_id: selectedRoute.route_id,
-      selected_harness: selectedRoute.harness,
-      selected_model: selectedRoute.resolved_runtime_model,
-      actual_harness: null,
-      actual_model: null,
-      dispatch_status: 'launch_failed',
-      dispatch_match: false,
-      terminal_state: 'LAUNCH_FAILED',
-      error_category: 'harness_launch_failure',
-      error_message: String(spawnResult?.error || 'spawn failed').slice(0, 500),
-      completed_at: new Date().toISOString()
-    });
-    if (spawnRunner || effectiveExcludes.includes(selectedRoute.route_id)) {
-      return { success: false, taskId, executionId: execId, routeDecision: decision, selectedRoute, spawnOutput: '' };
-    }
-    return dispatchThroughHerdr({
+    ingressDispatchFailed({
       taskId,
-      role,
-      dataClass,
-      targetEffort,
-      intent,
-      spec,
-      scout,
-      projectDir,
-      repoName,
-      mode,
-      yolo,
-      excludeRoutes: [...excludeRoutes, selectedRoute.route_id],
-      diagnosticConstraint,
-      quotaOverrides,
-      spawnRunner
+      routeExecutionId: execId,
+      parentExecutionId: rootExecId,
+      attemptNumber,
+      retryCount,
+      path: 'A',
+      selectedRouteId: selectedRoute.route_id,
+      selectedHarness: selectedRoute.harness,
+      selectedModel: selectedRoute.resolved_runtime_model,
+      selectedEffort: selectedRoute.reasoning_effort,
+      errorMessage: String(spawnResult?.error || 'spawn failed').slice(0, 500),
+      extra: {
+        requested_role: role,
+        data_class: dataClass,
+        ...(diagnosticConstraint ? { diagnostic_constraint: diagnosticConstraint } : {})
+      }
     });
+
+    if (effectiveExcludes.includes(selectedRoute.route_id)) {
+      return { success: false, taskId, executionId: execId, routeExecutionId: execId, routeDecision: decision, selectedRoute, spawnOutput: '' };
+    }
+    try {
+      return dispatchThroughHerdr({
+        taskId,
+        role,
+        dataClass,
+        targetEffort,
+        intent,
+        spec,
+        scout,
+        projectDir,
+        repoName,
+        mode,
+        yolo,
+        excludeRoutes: [...excludeRoutes, selectedRoute.route_id],
+        diagnosticConstraint,
+        quotaOverrides,
+        spawnRunner,
+        parentExecutionId: rootExecId,
+        routeExecutionId: `${rootExecId}:retry-${retryCount + 1}`,
+        attemptNumber: attemptNumber + 1,
+        retryCount: retryCount + 1,
+        useLiveAxi,
+        backend
+      });
+    } catch (retryError) {
+      return { success: false, taskId, executionId: execId, routeExecutionId: execId, routeDecision: decision, selectedRoute, spawnOutput: '', error: retryError.message };
+    }
   }
 
   const metaPath = homePath(path.join('state', `${taskId}.meta`));
@@ -755,36 +982,40 @@ export function dispatchThroughHerdr({
     }
   }
 
-  logTelemetry({
-    execution_id: execId,
-    task_id: taskId,
-    requested_role: role,
-    data_class: dataClass,
-    ...(diagnosticConstraint ? { diagnostic_constraint: diagnosticConstraint } : {}),
-    selected_route_id: selectedRoute.route_id,
-    selected_harness: selectedRoute.harness,
-    selected_model: selectedRoute.resolved_runtime_model,
-    selected_effort: selectedRoute.reasoning_effort,
-    actual_harness: meta.harness || selectedRoute.harness,
-    actual_model: meta.model || selectedRoute.resolved_runtime_model,
-    actual_effort: meta.effort || selectedRoute.reasoning_effort,
-    herdr_worker_id: meta.window || meta.herdr_pane_id || 'unknown',
-    herdr_task_id: taskId,
-    herdr_session: meta.herdr_session || null,
-    herdr_workspace_id: meta.herdr_workspace_id || null,
-    herdr_tab_id: meta.herdr_tab_id || null,
-    herdr_pane_id: meta.herdr_pane_id || null,
+  ingressDispatchDispatched({
+    taskId,
+    routeExecutionId: execId,
+    parentExecutionId: rootExecId,
+    attemptNumber,
+    retryCount,
+    path: 'A',
+    selectedRouteId: selectedRoute.route_id,
+    selectedHarness: selectedRoute.harness,
+    selectedModel: selectedRoute.resolved_runtime_model,
+    selectedEffort: selectedRoute.reasoning_effort,
+    actualHarness: meta.harness || selectedRoute.harness,
+    actualModel: meta.model || selectedRoute.resolved_runtime_model,
+    actualEffort: meta.effort || selectedRoute.reasoning_effort,
+    workerId: meta.window || meta.herdr_pane_id || 'unknown',
     worktree: meta.worktree || null,
     pid: meta.pid ? Number(meta.pid) : null,
-    dispatch_match: true,
-    dispatch_status: 'dispatched',
-    dispatched_at: new Date().toISOString()
+    backend: meta.backend || 'herdr',
+    extra: {
+      requested_role: role,
+      data_class: dataClass,
+      ...(diagnosticConstraint ? { diagnostic_constraint: diagnosticConstraint } : {}),
+      herdr_session: meta.herdr_session || null,
+      herdr_workspace_id: meta.herdr_workspace_id || null,
+      herdr_tab_id: meta.herdr_tab_id || null,
+      herdr_pane_id: meta.herdr_pane_id || null
+    }
   });
 
   return {
     success: true,
     taskId,
     executionId: execId,
+    routeExecutionId: execId,
     routeDecision: decision,
     selectedRoute,
     herdr: {
@@ -800,7 +1031,13 @@ export function dispatchThroughHerdr({
   };
 }
 
-export function recordTaskCompletion(taskId, { terminalState = 'SUCCESS', resultSummary = '', exitCode = 0 } = {}) {
+export function recordTaskCompletion(taskId, {
+  terminalState = 'SUCCESS',
+  resultSummary = '',
+  exitCode = 0,
+  routeExecutionId = null,
+  parentExecutionId = null
+} = {}) {
   const metaPath = homePath(path.join('state', `${taskId}.meta`));
   let meta = {};
   if (fs.existsSync(metaPath)) {
@@ -815,20 +1052,85 @@ export function recordTaskCompletion(taskId, { terminalState = 'SUCCESS', result
 
   const reportPath = homePath(path.join('data', taskId, 'report.md'));
   const hasReport = fs.existsSync(reportPath);
+  const logPath = getExecutionsLogPath();
 
+  let execId = routeExecutionId || meta.route_execution_id || meta.execution_id;
+  let parentId = parentExecutionId || meta.parent_route_execution_id;
+  let dispatchPath = meta.dispatch_path || null;
+
+  if (fs.existsSync(logPath)) {
+    try {
+      const lines = fs.readFileSync(logPath, 'utf8').trim().split('\n');
+      for (let i = lines.length - 1; i >= 0; i--) {
+        const line = lines[i].trim();
+        if (!line) continue;
+        const entry = JSON.parse(line);
+        if (entry.task_id === taskId && (entry.route_execution_id || entry.execution_id)) {
+          if (!execId) {
+            execId = entry.route_execution_id || entry.execution_id;
+            parentId = entry.parent_route_execution_id || execId;
+          }
+          if (!dispatchPath && entry.dispatch_path) {
+            dispatchPath = entry.dispatch_path;
+          }
+          break;
+        }
+      }
+    } catch (_) {}
+  }
+
+  if (!execId) {
+    execId = `exec-${Date.now()}-${Math.floor(Math.random()*1000)}`;
+  }
+  if (!parentId) {
+    parentId = execId;
+  }
+
+  // Idempotency check: if completed already recorded for this execution ID, do not re-append
+  if (fs.existsSync(logPath)) {
+    try {
+      const lines = fs.readFileSync(logPath, 'utf8').trim().split('\n');
+      for (let i = lines.length - 1; i >= 0; i--) {
+        const line = lines[i].trim();
+        if (!line) continue;
+        const entry = JSON.parse(line);
+        if (
+          (entry.route_execution_id === execId || entry.execution_id === execId) &&
+          entry.dispatch_status === 'completed'
+        ) {
+          return entry;
+        }
+      }
+    } catch (_) {}
+  }
+
+  let quotaSnapshotAfter = null;
+  try {
+    quotaSnapshotAfter = resolveLiveQuotaPools({ useLiveAxi: true });
+  } catch (_) {
+    quotaSnapshotAfter = null;
+  }
+
+  const now = new Date().toISOString();
   const completedRecord = {
-    execution_id: `exec-${Date.now()}-${Math.floor(Math.random()*1000)}`,
+    route_execution_id: execId,
+    parent_route_execution_id: parentId,
+    execution_id: execId,
     task_id: taskId,
+    dispatch_path: dispatchPath,
     actual_harness: meta.harness || null,
     actual_model: meta.model || null,
     actual_effort: meta.effort || null,
     herdr_worker_id: meta.window || null,
     dispatch_status: 'completed',
+    lifecycle_state: terminalState === 'SUCCESS' ? 'COMPLETED' : 'FAILED',
     terminal_state: terminalState,
     exit_code: exitCode,
     artifact_path: hasReport ? `data/${taskId}/report.md` : null,
     result_summary: resultSummary || (hasReport ? fs.readFileSync(reportPath, 'utf8').slice(0, 300) : ''),
-    completed_at: new Date().toISOString()
+    quota_snapshot_after: quotaSnapshotAfter,
+    completed_at: now,
+    timestamp: now
   };
   logTelemetry(completedRecord);
   return completedRecord;
@@ -838,11 +1140,31 @@ export function teardownTask(taskId, { force = false } = {}) {
   try {
     const args = [path.join(ROOT, 'bin/fm-teardown.sh'), taskId];
     if (force) args.push('--force');
-    const stdout = execFileSync('bash', args, { encoding: 'utf8', stdio: 'pipe', env: { ...process.env, FM_HOME } });
+    const stdout = execFileSync('bash', args, { encoding: 'utf8', stdio: 'pipe', env: { ...process.env, FM_HOME: currentFmHome() } });
     return { success: true, output: stdout };
   } catch (e) {
     return { success: false, error: e.stderr || e.message };
   }
+}
+
+function parseCliFlags(argv) {
+  const flags = {};
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg.startsWith('--')) {
+      const eqIdx = arg.indexOf('=');
+      if (eqIdx !== -1) {
+        const k = arg.slice(2, eqIdx);
+        const v = arg.slice(eqIdx + 1);
+        flags[k] = v;
+      } else if (i + 1 < argv.length && !argv[i + 1].startsWith('--')) {
+        flags[arg.slice(2)] = argv[++i];
+      } else {
+        flags[arg.slice(2)] = true;
+      }
+    }
+  }
+  return flags;
 }
 
 // CLI handler
@@ -895,10 +1217,74 @@ if (process.argv[1] && process.argv[1].endsWith('fm-router-v2.mjs')) {
       console.error(`DISPATCH ERROR: ${e.message}`);
       process.exit(1);
     }
+  } else if (cmd === 'ingress-start') {
+    const flags = parseCliFlags(process.argv.slice(3));
+    const isSecondmateRelaunch = Boolean(flags['secondmate-relaunch']);
+    const dispatchType = isSecondmateRelaunch ? 'system_internal_relaunch' : 'task_dispatch';
+    const marker = isSecondmateRelaunch
+      ? 'system-internal relaunch, no candidate set evaluated'
+      : 'legacy/manual decision, no candidate set evaluated';
+    const entry = ingressDispatchStarted({
+      taskId: flags['task-id'],
+      routeExecutionId: flags['route-execution-id'],
+      parentExecutionId: flags['parent-execution-id'],
+      path: flags['path'] || 'B',
+      taskClassification: flags['task-classification'] || flags['role'] || flags['kind'] || 'crewmate',
+      dataClass: flags['data-class'] || 'LEGACY_UNCLASSIFIED',
+      candidateRoutes: null,
+      candidateRouteSetMarker: marker,
+      routeDecision: {
+        decision_type: isSecondmateRelaunch ? 'system_internal_relaunch' : 'legacy_manual',
+        marker,
+        harness: flags['harness'] || 'default',
+        model: flags['model'] || 'default',
+        effort: flags['effort'] || 'default',
+        route_id: flags['route-id'] || null
+      },
+      selectedRouteId: flags['route-id'] || null,
+      selectedHarness: flags['harness'] || null,
+      selectedModel: flags['model'] || null,
+      selectedEffort: flags['effort'] || null,
+      dispatchType
+    });
+    console.log(JSON.stringify(entry));
+  } else if (cmd === 'ingress-dispatched') {
+    const flags = parseCliFlags(process.argv.slice(3));
+    const isSecondmateRelaunch = Boolean(flags['secondmate-relaunch']);
+    const dispatchType = isSecondmateRelaunch ? 'system_internal_relaunch' : 'task_dispatch';
+    const entry = ingressDispatchDispatched({
+      taskId: flags['task-id'],
+      routeExecutionId: flags['route-execution-id'],
+      parentExecutionId: flags['parent-execution-id'],
+      path: flags['path'] || 'B',
+      actualHarness: flags['actual-harness'],
+      actualModel: flags['actual-model'],
+      actualEffort: flags['actual-effort'],
+      workerId: flags['worker-id'] || flags['window'],
+      worktree: flags['worktree'],
+      backend: flags['backend'],
+      pid: flags['pid'],
+      dispatchType
+    });
+    console.log(JSON.stringify(entry));
+  } else if (cmd === 'ingress-failed') {
+    const flags = parseCliFlags(process.argv.slice(3));
+    const isSecondmateRelaunch = Boolean(flags['secondmate-relaunch']);
+    const dispatchType = isSecondmateRelaunch ? 'system_internal_relaunch' : 'task_dispatch';
+    const entry = ingressDispatchFailed({
+      taskId: flags['task-id'],
+      routeExecutionId: flags['route-execution-id'],
+      parentExecutionId: flags['parent-execution-id'],
+      path: flags['path'] || 'B',
+      errorMessage: flags['error'] || 'spawn failed',
+      dispatchType
+    });
+    console.log(JSON.stringify(entry));
   } else if (cmd === 'complete') {
     const taskId = process.argv[3];
     const state = process.argv[4] || 'SUCCESS';
-    const res = recordTaskCompletion(taskId, { terminalState: state });
+    const summary = process.argv[5] || '';
+    const res = recordTaskCompletion(taskId, { terminalState: state, resultSummary: summary });
     console.log(JSON.stringify(res, null, 2));
   } else if (cmd === 'teardown') {
     const taskId = process.argv[3];

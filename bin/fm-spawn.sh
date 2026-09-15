@@ -454,6 +454,8 @@ EFFORT=
 ROLE=
 DATA_CLASS=
 ROUTE_ID=
+ROUTE_EXECUTION_ID=
+PARENT_EXECUTION_ID=
 BACKEND_ARG=
 MODE=
 YOLO=
@@ -464,6 +466,8 @@ EFFORT_SET=0
 ROLE_SET=0
 DATA_CLASS_SET=0
 ROUTE_ID_SET=0
+ROUTE_EXECUTION_ID_SET=0
+PARENT_EXECUTION_ID_SET=0
 BACKEND_SET=0
 MODE_SET=0
 YOLO_SET=0
@@ -483,6 +487,8 @@ for a in "$@"; do
       role) ROLE=$a; ROLE_SET=1 ;;
       data_class) DATA_CLASS=$a; DATA_CLASS_SET=1 ;;
       route_id) ROUTE_ID=$a; ROUTE_ID_SET=1 ;;
+      route_execution_id) ROUTE_EXECUTION_ID=$a; ROUTE_EXECUTION_ID_SET=1 ;;
+      parent_execution_id) PARENT_EXECUTION_ID=$a; PARENT_EXECUTION_ID_SET=1 ;;
       backend) BACKEND_ARG=$a; BACKEND_SET=1 ;;
       mode) MODE=$a; MODE_SET=1 ;;
       yolo) YOLO=$a; YOLO_SET=1 ;;
@@ -508,6 +514,10 @@ for a in "$@"; do
     --data-class=*) DATA_CLASS=${a#--data-class=}; DATA_CLASS_SET=1 ;;
     --route-id) want_value=route_id ;;
     --route-id=*) ROUTE_ID=${a#--route-id=}; ROUTE_ID_SET=1 ;;
+    --route-execution-id) want_value=route_execution_id ;;
+    --route-execution-id=*) ROUTE_EXECUTION_ID=${a#--route-execution-id=}; ROUTE_EXECUTION_ID_SET=1 ;;
+    --parent-execution-id) want_value=parent_execution_id ;;
+    --parent-execution-id=*) PARENT_EXECUTION_ID=${a#--parent-execution-id=}; PARENT_EXECUTION_ID_SET=1 ;;
     --backend) want_value=backend ;;
     --backend=*) BACKEND_ARG=${a#--backend=}; BACKEND_SET=1 ;;
     --mode) want_value=mode ;;
@@ -526,10 +536,18 @@ done
 [ "$ROLE_SET" -eq 0 ] || [ -n "$ROLE" ] || { echo "error: --role requires a non-empty value" >&2; exit 1; }
 [ "$DATA_CLASS_SET" -eq 0 ] || [ -n "$DATA_CLASS" ] || { echo "error: --data-class requires a non-empty value" >&2; exit 1; }
 [ "$ROUTE_ID_SET" -eq 0 ] || [ -n "$ROUTE_ID" ] || { echo "error: --route-id requires a non-empty value" >&2; exit 1; }
+[ "$ROUTE_EXECUTION_ID_SET" -eq 0 ] || [ -n "$ROUTE_EXECUTION_ID" ] || { echo "error: --route-execution-id requires a non-empty value" >&2; exit 1; }
+[ "$PARENT_EXECUTION_ID_SET" -eq 0 ] || [ -n "$PARENT_EXECUTION_ID" ] || { echo "error: --parent-execution-id requires a non-empty value" >&2; exit 1; }
 [ "$BACKEND_SET" -eq 0 ] || [ -n "$BACKEND_ARG" ] || { echo "error: --backend requires a non-empty value" >&2; exit 1; }
 [ "$MODE_SET" -eq 0 ] || [ -n "$MODE" ] || { echo "error: --mode requires a non-empty value" >&2; exit 1; }
 [ "$YOLO_SET" -eq 0 ] || [ -n "$YOLO" ] || { echo "error: --yolo requires a non-empty value" >&2; exit 1; }
 [ "$TRACEPARENT_SET" -eq 0 ] || [ -n "$TRACEPARENT_ARG" ] || { echo "error: --traceparent requires a non-empty value" >&2; exit 1; }
+if [ "$ROUTE_EXECUTION_ID_SET" -eq 0 ]; then
+  ROUTE_EXECUTION_ID="rex-$(date +%s%3N)-$((RANDOM % 1000))"
+fi
+if [ "$PARENT_EXECUTION_ID_SET" -eq 0 ]; then
+  PARENT_EXECUTION_ID="$ROUTE_EXECUTION_ID"
+fi
 # A parent-delivered carrier replaces this home's own resolution, so it is
 # refused unless it is a secondmate spawn carrying a strictly valid W3C value.
 # Nothing else may reach the pane's TRACEPARENT export.
@@ -3820,6 +3838,8 @@ preserve_relaunch_meta() {
   [ -z "$ROLE" ] || echo "role=$ROLE"
   [ -z "$DATA_CLASS" ] || echo "data_class=$DATA_CLASS"
   [ -z "$ROUTE_ID" ] || echo "route_id=$ROUTE_ID"
+  echo "route_execution_id=$ROUTE_EXECUTION_ID"
+  echo "parent_route_execution_id=$PARENT_EXECUTION_ID"
   [ -z "${BUSY_GEN:-}" ] || echo "busy_gen=$BUSY_GEN"
   echo "spawn_gen=$SPAWN_GEN"
   # Default-off writes no traceparent= line.
@@ -3852,9 +3872,9 @@ preserve_relaunch_meta() {
   fi
   if [ "$RELAUNCH" -eq 1 ]; then
     if [ "$ROUTE_ID_SET" -eq 1 ]; then
-      preserve_relaunch_meta | awk -F= '$1 != "route_id"'
+      preserve_relaunch_meta | awk -F= '$1 != "route_id" && $1 != "route_execution_id" && $1 != "parent_route_execution_id"'
     else
-      preserve_relaunch_meta
+      preserve_relaunch_meta | awk -F= '$1 != "route_execution_id" && $1 != "parent_route_execution_id"'
     fi
   fi
   if [ "$SPAWN_CONTROL_PARENT" = 1 ] && [ -n "${FM_CONTROL_RELAUNCH_TX:-}" ]; then
@@ -3948,6 +3968,29 @@ if [ "$SPAWN_TASK_SET_LOCK_HELD" = 1 ]; then
   fm_lock_release "$SPAWN_TASK_SET_LOCK"
 fi
 "$SCRIPT_DIR/fm-home-summary-refresh.sh" --best-effort || true
+if [ "$ROUTE_EXECUTION_ID_SET" -eq 0 ]; then
+  is_secondmate_relaunch=0
+  if [ "$KIND" = secondmate ] && { [ "$RELAUNCH" -eq 1 ] || [ -n "${FM_SPAWN_NO_GUARD:-}" ]; }; then
+    is_secondmate_relaunch=1
+  fi
+  extra_relaunch_flag=()
+  if [ "$is_secondmate_relaunch" -eq 1 ]; then
+    extra_relaunch_flag=("--secondmate-relaunch")
+  fi
+  node "$FM_ROOT/bin/fm-router-v2.mjs" ingress-start \
+    --task-id "$ID" \
+    --route-execution-id "$ROUTE_EXECUTION_ID" \
+    --parent-execution-id "$PARENT_EXECUTION_ID" \
+    --path "B" \
+    --task-classification "${ROLE:-$KIND}" \
+    --data-class "${DATA_CLASS:-LEGACY_UNCLASSIFIED}" \
+    --harness "$HARNESS" \
+    --model "${MODEL:-default}" \
+    --effort "${EFFORT:-default}" \
+    --route-id "${ROUTE_ID:-}" \
+    ${extra_relaunch_flag[@]+"${extra_relaunch_flag[@]}"} \
+    >/dev/null 2>&1 || true
+fi
 [ "$BACKEND" = orca ] && ORCA_ABORT_CLEANUP=0
 
 sq_brief=$(shell_quote "$BRIEF")
@@ -4233,6 +4276,24 @@ if [ "$SPAWN_BACKLOG_COMMIT_STATUS" -ne 0 ]; then
 fi
 trap - HUP INT TERM
 if [ "$SPAWN_BACKLOG_COMMIT_STATUS" -ne 0 ]; then
+  if [ "$ROUTE_EXECUTION_ID_SET" -eq 0 ]; then
+    is_secondmate_relaunch=0
+    if [ "$KIND" = secondmate ] && { [ "$RELAUNCH" -eq 1 ] || [ -n "${FM_SPAWN_NO_GUARD:-}" ]; }; then
+      is_secondmate_relaunch=1
+    fi
+    extra_relaunch_flag=()
+    if [ "$is_secondmate_relaunch" -eq 1 ]; then
+      extra_relaunch_flag=("--secondmate-relaunch")
+    fi
+    node "$FM_ROOT/bin/fm-router-v2.mjs" ingress-failed \
+      --task-id "$ID" \
+      --route-execution-id "$ROUTE_EXECUTION_ID" \
+      --parent-execution-id "$PARENT_EXECUTION_ID" \
+      --path "B" \
+      --error "backlog commit failed: ${FM_BACKLOG_TRANSITION_ERROR:-unknown}" \
+      ${extra_relaunch_flag[@]+"${extra_relaunch_flag[@]}"} \
+      >/dev/null 2>&1 || true
+  fi
   exit "$SPAWN_BACKLOG_COMMIT_STATUS"
 fi
 if [ -n "$SPAWN_DEFERRED_SIGNAL" ]; then
@@ -4253,6 +4314,31 @@ if [ -n "$SPAWN_DEFERRED_SIGNAL" ]; then
 fi
 fm_lock_release "$SPAWN_META_LOCK"
 SPAWN_META_LOCK_HELD=0
+
+if [ "$ROUTE_EXECUTION_ID_SET" -eq 0 ]; then
+  is_secondmate_relaunch=0
+  if [ "$KIND" = secondmate ] && { [ "$RELAUNCH" -eq 1 ] || [ -n "${FM_SPAWN_NO_GUARD:-}" ]; }; then
+    is_secondmate_relaunch=1
+  fi
+  extra_relaunch_flag=()
+  if [ "$is_secondmate_relaunch" -eq 1 ]; then
+    extra_relaunch_flag=("--secondmate-relaunch")
+  fi
+  node "$FM_ROOT/bin/fm-router-v2.mjs" ingress-dispatched \
+    --task-id "$ID" \
+    --route-execution-id "$ROUTE_EXECUTION_ID" \
+    --parent-execution-id "$PARENT_EXECUTION_ID" \
+    --path "B" \
+    --actual-harness "$HARNESS" \
+    --actual-model "${MODEL:-default}" \
+    --actual-effort "${EFFORT:-default}" \
+    --worker-id "$META_WINDOW" \
+    --worktree "$WT" \
+    --backend "$BACKEND" \
+    --pid "${PID:-}" \
+    ${extra_relaunch_flag[@]+"${extra_relaunch_flag[@]}"} \
+    >/dev/null 2>&1 || true
+fi
 
 SPAWN_DELIVERY=
 [ -z "$MODE" ] || SPAWN_DELIVERY=" mode=$MODE yolo=$YOLO"

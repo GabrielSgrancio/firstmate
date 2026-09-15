@@ -3361,6 +3361,15 @@ rm -rf "$STATE/$ID.inbox"
 # racing the same id stays serialized exactly as it was before. A captain-held
 # row takes the retain transition here instead of the close: same record, same
 # ordering, the row returns to Queued with its deliverable recorded.
+if [ -f "$META" ]; then
+  teardown_terminal_state="SUCCESS"
+  if [ "${BACKLOG_TRANSITION:-}" = retain ]; then
+    teardown_terminal_state="HELD_FOR_CAPTAIN"
+  elif [ -f "$STATE/$ID.status" ] && grep -qE '^(failed|blocked):' "$STATE/$ID.status"; then
+    teardown_terminal_state="FAILED"
+  fi
+  node "$FM_ROOT/bin/fm-router-v2.mjs" complete "$ID" "$teardown_terminal_state" >/dev/null 2>&1 || true
+fi
 if [ "$BACKLOG_CLOSED" = 1 ]; then
   BACKLOG_CLOSE_MARKER=$(fm_backlog_close_marker_path "$STATE" "$ID") || exit 1
   if ! fm_backlog_atomic_transition "$BACKLOG_TRANSITION" "$STATE/$ID.meta" "$BACKLOG_CLOSE_MARKER" \
