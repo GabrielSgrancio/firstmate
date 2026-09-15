@@ -14,6 +14,14 @@ import {
   promotionCriteria,
   familyPriorKey
 } from './fm-routing-capability.mjs';
+import {
+  RESOURCE_POOLS,
+  buildPoolEconomics,
+  buildRouteEconomics,
+  calculateObservedQuotaDelta,
+  collectRoutingObservations,
+  selectEconomicRoute
+} from './fm-routing-economics.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const currentFmHome = () => path.resolve(process.env.FM_HOME || ROOT);
@@ -513,6 +521,182 @@ export function resolveLiveQuotaPools({ quotaOverrides = null, useLiveAxi = true
   return pools;
 }
 
+export const TASK_CLASS_QUALITY_FLOORS = Object.freeze({
+  targeted_edit: 0.84,
+  mechanical_tool_work: 0.82,
+  test_generation: 0.84,
+  refactor: 0.70,
+  multi_file_feature: 0.80,
+  brownfield_debugging: 0.93,
+  large_context_repository_retrieval: 0.78,
+  long_horizon_autonomous_engineering: 0.90,
+  architecture_reasoning: 0.93,
+  critical_audit: 0.96
+});
+
+export function qualityFloorForTask({ taskClass, critical = false, qualityFloor = null } = {}) {
+  if (Number.isFinite(qualityFloor)) return Math.min(0.999, Math.max(0.01, qualityFloor));
+  const configured = TASK_CLASS_QUALITY_FLOORS[taskClass] ?? 0.80;
+  return critical ? Math.max(configured, 0.96) : configured;
+}
+
+function readRoutingTelemetryRecords() {
+  const logPath = getExecutionsLogPath();
+  if (!fs.existsSync(logPath)) return [];
+  try {
+    return fs.readFileSync(logPath, 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line));
+  } catch (_) {
+    return [];
+  }
+}
+
+function routePoolName(route) {
+  if (route?.quota_pool?.startsWith('opencode_go')) return 'opencode_go';
+  return route?.quota_pool;
+}
+
+function effortFitScore(requiredEffort, candidateEffort) {
+  if (!candidateEffort) return 0;
+  if (candidateEffort === requiredEffort) return 1;
+  if (requiredEffort === 'high' && ['low', 'minimal'].includes(candidateEffort)) return -1;
+  if (requiredEffort === 'low' && ['high', 'xhigh', 'max', 'ultra'].includes(candidateEffort)) return -1;
+  return -0.5;
+}
+
+function priorForRoute(route, priors) {
+  const candidates = [
+    route?.resolved_runtime_model,
+    route?.resolved_runtime_model?.replace(/^opencode-go\//, ''),
+    route?.model_family,
+    route?.logical_alias
+  ].filter(Boolean);
+  for (const key of candidates) {
+    const prior = priors?.priors?.[key];
+    if (Number.isFinite(prior?.prior_mean)) return prior;
+    if (Number.isFinite(prior?.posterior_mean)) return { ...prior, prior_mean: prior.posterior_mean };
+  }
+  return null;
+}
+
+function qualityEvidence(candidate, selectedTaskClass, learned, priors) {
+  const direct = candidate.capability;
+  if (Number.isFinite(direct?.posterior_mean)) {
+    return {
+      quality: Math.min(0.999, Math.max(0.01, direct.posterior_mean)),
+      source: direct.real_n > 0 ? 'real_capability' : 'capability_prior',
+      real_n: direct.real_n || 0
+    };
+  }
+  const familyPrior = familyPriorKey(candidate.route)
+    ? learned?.model_family_priors?.[familyPriorKey(candidate.route)]?.[selectedTaskClass]
+    : null;
+  if (Number.isFinite(familyPrior?.prior_mean)) {
+    return { quality: familyPrior.prior_mean, source: 'family_prior', real_n: 0 };
+  }
+  const externalPrior = priorForRoute(candidate.route, priors);
+  if (Number.isFinite(externalPrior?.prior_mean)) {
+    return { quality: externalPrior.prior_mean, source: 'seed_prior', real_n: 0 };
+  }
+  return { quality: 0.50, source: 'untested', real_n: 0 };
+}
+
+export function stageAHardRequirements({
+  candidates = [],
+  liveQuota = {},
+  poolEconomics = {},
+  dataClass,
+  allowChallengers = false,
+  excludeRoutes = [],
+  requiredEffort = null,
+  effortWasExplicit = false
+} = {}) {
+  const survivors = [];
+  const rejected = [];
+  for (const candidate of candidates) {
+    const route = candidate.route;
+    const routeId = route.route_id;
+    const reject = (reason) => rejected.push({ route_id: routeId, reason, stage: 'A_hard_requirements' });
+    if (excludeRoutes.includes(routeId)) {
+      reject('Excluded by fallback re-routing policy');
+      continue;
+    }
+    if (candidate.capabilityStatus === 'MANUAL_ONLY') {
+      reject('Lifecycle Blocked: MANUAL_ONLY candidate requires manual captain specification');
+      continue;
+    }
+    if (candidate.capabilityStatus === 'CHALLENGER' && !allowChallengers) {
+      reject('Lifecycle Blocked: CHALLENGER candidate blocked under non-exploratory policy');
+      continue;
+    }
+    if (candidate.capabilityStatus === 'CREDIT_GATED' || ['BROKEN', 'MANUAL_ONLY', 'CREDIT_GATED'].includes(route.routing_status) || route.availability === 'credit_gated') {
+      reject(`Unavailable / Lifecycle blocked (${route.routing_status || candidate.capabilityStatus})`);
+      continue;
+    }
+    if (route.availability && !['available', 'unknown'].includes(route.availability)) {
+      reject(`Unavailable route (${route.availability})`);
+      continue;
+    }
+    if (effortWasExplicit && route.reasoning_effort && requiredEffort && route.reasoning_effort !== requiredEffort) {
+      reject(`Effort ${route.reasoning_effort} does not satisfy explicitly requested effort ${requiredEffort}`);
+      continue;
+    }
+
+    const gate = evaluateDataGate(dataClass, route.data_profile, { resolvedRuntimeModel: route.resolved_runtime_model });
+    if (!gate.allowed) {
+      reject(`Data Policy Rejected: ${gate.reason}`);
+      continue;
+    }
+
+    const poolName = routePoolName(route);
+    const pool = liveQuota[poolName] || {};
+    const economics = poolEconomics[poolName] || {};
+    const scarcityState = economics.scarcity_state || pool.scarcity_state || 'UNKNOWN';
+    if (['UNAVAILABLE', 'AUTH_REQUIRED', 'ERROR'].includes(pool.status)) {
+      reject(`Quota Pool unavailable (${pool.status})`);
+      continue;
+    }
+    if (scarcityState === 'EXHAUSTED') {
+      reject('Quota Pool Exhausted');
+      continue;
+    }
+    if (Number.isFinite(economics.max_concurrency) && economics.current_concurrency >= economics.max_concurrency) {
+      reject(`Capacity exhausted (${economics.current_concurrency}/${economics.max_concurrency} concurrent tasks)`);
+      continue;
+    }
+    survivors.push({ ...candidate, pool, poolName, economics, scarcityState });
+  }
+  return { survivors, rejected };
+}
+
+export function stageBQualityGate({
+  candidates = [],
+  taskClass,
+  critical = false,
+  qualityFloor = null,
+  learned = null,
+  priors = null
+} = {}) {
+  const floor = qualityFloorForTask({ taskClass, critical, qualityFloor });
+  const survivors = [];
+  const rejected = [];
+  for (const candidate of candidates) {
+    const evidence = qualityEvidence(candidate, taskClass, learned, priors);
+    const enriched = { ...candidate, qualityScore: evidence.quality, qualityEvidence: evidence };
+    if (evidence.quality < floor) {
+      rejected.push({
+        route_id: candidate.route.route_id,
+        reason: `Quality floor rejected route: P(success) ${evidence.quality.toFixed(4)} < ${floor.toFixed(4)}`,
+        stage: 'B_quality_floor',
+        quality: evidence.quality,
+        quality_source: evidence.source
+      });
+      continue;
+    }
+    survivors.push(enriched);
+  }
+  return { floor, survivors, rejected };
+}
+
 export function scoreAndSelectRoute({
   role,
   taskClass = null,
@@ -523,12 +707,15 @@ export function scoreAndSelectRoute({
   quotaOverrides = null,
   allowChallengers = false,
   excludeRoutes = [],
-  useLiveAxi = true
+  useLiveAxi = true,
+  qualityFloor = null,
+  telemetryRecords = null,
+  now = new Date()
 }) {
   if (!dataClass || dataClass === 'UNKNOWN') {
     throw new Error(`dataClass is required and must not be empty or UNKNOWN (fail-closed policy)`);
   }
-  const { registry, policy, learned, compiledRoutes } = loadConfigs();
+  const { registry, policy, priors, learned, compiledRoutes } = loadConfigs();
   if (!registry.canonical_roles.includes(role)) {
     throw new Error(`Cannot route unknown role: "${role}"`);
   }
@@ -547,182 +734,65 @@ export function scoreAndSelectRoute({
 
   const requiredEffort = targetEffort || ROLE_DEFAULT_EFFORT[role] || 'medium';
 
-  // Use resolved live quota pools with optional overrides and fail-closed normalization
+  // Use one intake quota snapshot for all three stages.
   const liveQuota = resolveLiveQuotaPools({ quotaOverrides, useLiveAxi });
-
-  // 1. Gather RouteTargets from empirical task-class evidence or WP9 exploration eligibility.
   const candidateRoutes = capabilityQuery.candidates.map(candidate => candidate.route);
-  const candidateMetadata = new Map(capabilityQuery.candidates.map(candidate => [candidate.route.route_id, candidate]));
-
-  const rejectedRoutes = [...capabilityQuery.rejected];
-  const viableCandidates = [];
-
-  for (const route of candidateRoutes) {
-    const metadata = candidateMetadata.get(route.route_id);
-    const capabilityStatus = metadata.capabilityStatus;
-    // Stage 0: Exclude routes requested by fallback re-routing policy
-    if (excludeRoutes && excludeRoutes.includes(route.route_id)) {
-      rejectedRoutes.push({ route_id: route.route_id, reason: 'Excluded by fallback re-routing policy' });
-      continue;
-    }
-
-    // Stage 1: Lifecycle & Status Enforcement
-    if (capabilityStatus === 'MANUAL_ONLY') {
-      rejectedRoutes.push({ route_id: route.route_id, reason: 'Lifecycle Blocked: MANUAL_ONLY candidate requires manual captain specification' });
-      continue;
-    }
-    if (capabilityStatus === 'CHALLENGER' && !allowChallengers) {
-      rejectedRoutes.push({ route_id: route.route_id, reason: 'Lifecycle Blocked: CHALLENGER candidate blocked under non-exploratory policy' });
-      continue;
-    }
-    if (capabilityStatus === 'CREDIT_GATED' || route.routing_status === 'CREDIT_GATED' || route.availability === 'credit_gated') {
-      rejectedRoutes.push({ route_id: route.route_id, reason: `Unavailable / Credit Gated (${route.routing_status})` });
-      continue;
-    }
-
-    // Stage 2: Data Policy Gate
-    const gate = evaluateDataGate(dataClass, route.data_profile, { resolvedRuntimeModel: route.resolved_runtime_model });
-    if (!gate.allowed) {
-      rejectedRoutes.push({ route_id: route.route_id, reason: `Data Policy Rejected: ${gate.reason}` });
-      continue;
-    }
-
-    // Stage 3: Quota Pool State
-    let pool = liveQuota[route.quota_pool];
-    // If route maps to shared opencode_go pool
-    if (!pool && route.quota_pool.startsWith('opencode_go')) {
-      pool = liveQuota['opencode_go'];
-    }
-    pool = pool || {};
-
-    let scarcityState = pool.scarcity_state || 'UNKNOWN';
-    // If pool has multi-window subscription quotas and no explicit override, evaluate all windows and pick the most restrictive
-    if (!pool._explicit_override && poolWindowsFresh(pool) && pool.windows && typeof pool.windows === 'object') {
-      const severityRank = { EXHAUSTED: 6, CRITICAL: 5, CONSERVE: 4, USE_BEFORE_RESET: 3, NORMAL: 2, ABUNDANT: 1, UNKNOWN: 4 };
-      let windowSeverity = null;
-      for (const wKey of Object.keys(pool.windows)) {
-        const w = pool.windows[wKey];
-        if (!w) continue;
-        const rem = w.percent_remaining ?? (typeof w.percent_used === 'number' ? (100 - w.percent_used) : null);
-        if (rem === null) continue;
-        let s = 'ABUNDANT';
-        if (rem <= 0) s = 'EXHAUSTED';
-        else if (rem <= 10) s = 'CRITICAL';
-        else if (rem <= 25) s = 'CONSERVE';
-        else if (rem <= 50) s = 'NORMAL';
-        else s = 'ABUNDANT';
-        if (!windowSeverity || severityRank[s] > severityRank[windowSeverity]) {
-          windowSeverity = s;
-        }
-      }
-      if (windowSeverity) {
-        scarcityState = windowSeverity;
-      }
-    }
-    // If scarcity state cannot be determined, default to UNKNOWN / conservative, NEVER ABUNDANT
-    if (!scarcityState || scarcityState === 'UNKNOWN') {
-      scarcityState = 'UNKNOWN';
-    }
-
-    if (scarcityState === 'EXHAUSTED') {
-      rejectedRoutes.push({ route_id: route.route_id, reason: 'Quota Pool Exhausted' });
-      continue;
-    }
-
-    viableCandidates.push({ route, pool, scarcityState, metadata });
-  }
-
-  if (viableCandidates.length === 0) {
+  const quotaEconomics = collectRoutingObservations(telemetryRecords || readRoutingTelemetryRecords(), compiledRoutes, now);
+  const poolEconomics = buildPoolEconomics({ pools: liveQuota, observations: quotaEconomics, now });
+  const stageA = stageAHardRequirements({
+    candidates: capabilityQuery.candidates,
+    liveQuota,
+    poolEconomics,
+    dataClass,
+    allowChallengers,
+    excludeRoutes,
+    requiredEffort,
+    effortWasExplicit: targetEffort !== null
+  });
+  const candidateGenerationRejections = capabilityQuery.rejected.map((entry) => ({ ...entry, stage: 'candidate_generation' }));
+  const stageB = stageBQualityGate({
+    candidates: stageA.survivors,
+    taskClass: selectedTaskClass,
+    critical,
+    qualityFloor,
+    learned,
+    priors
+  });
+  const rejectedRoutes = [...candidateGenerationRejections, ...stageA.rejected, ...stageB.rejected];
+  if (stageA.survivors.length === 0) {
     throw new Error(`No viable RouteTargets for role "${role}" with dataClass "${dataClass}". Rejections: ${rejectedRoutes.map(r => `${r.route_id}: ${r.reason}`).join('; ')}`);
   }
+  if (stageB.survivors.length === 0) {
+    throw new Error(`No routes meet quality floor ${stageB.floor.toFixed(4)} for role "${role}" with dataClass "${dataClass}". Rejections: ${rejectedRoutes.map(r => `${r.route_id}: ${r.reason}`).join('; ')}`);
+  }
 
-  // 2. Capacity-Aware Pareto Scoring
-  const scored = viableCandidates.map(({ route, pool, scarcityState, metadata }) => {
-    // Quality Prior / Posterior
-    let qualityScore = 0.90;
-    const directStats = metadata.capability;
-    const familyPrior = familyPriorKey(route)
-      ? learned?.model_family_priors?.[familyPriorKey(route)]?.[selectedTaskClass]
-      : null;
-    if (directStats && typeof directStats.posterior_mean === 'number') {
-      qualityScore = directStats.posterior_mean;
-    } else if (familyPrior && typeof familyPrior.prior_mean === 'number') {
-      qualityScore = familyPrior.prior_mean;
-    }
-
-    // Generic Quota Scarcity Factor (no magic strings)
-    let quotaBonus = 0.0;
-    if (scarcityState === 'ABUNDANT') quotaBonus = 0.05;
-    else if (scarcityState === 'USE_BEFORE_RESET') quotaBonus = 0.15;
-    else if (scarcityState === 'CONSERVE' || scarcityState === 'UNKNOWN') quotaBonus = -0.10;
-    else if (scarcityState === 'CRITICAL') quotaBonus = -0.30;
-
-    // Generic Normalized Burn Impact based on expected_normalized_burn
-    const normalizedBurn = route.expected_normalized_burn || 1.0;
-    let burnMultiplier = 0.002; // Minimal penalty when abundant
-    if (scarcityState === 'CONSERVE' || scarcityState === 'UNKNOWN') {
-      burnMultiplier = 0.015; // Noticeable penalty for heavy burn under conservation
-    } else if (scarcityState === 'CRITICAL') {
-      burnMultiplier = 0.030; // Severe penalty for heavy burn under critical shortage
-    } else if (scarcityState === 'USE_BEFORE_RESET') {
-      burnMultiplier = 0.0; // Burn is free/encouraged
-    }
-    const burnPenalty = (normalizedBurn - 1.0) * burnMultiplier;
-    quotaBonus -= burnPenalty;
-
-    // Effort Fit Dimension
-    let effortFitScore = 0.0;
-    const candidateEffort = route.reasoning_effort;
-    if (candidateEffort === requiredEffort) {
-      effortFitScore = 0.05; // Exact effort fit bonus
-    } else if (candidateEffort === null) {
-      effortFitScore = (requiredEffort === 'high') ? -0.05 : 0.0;
-    } else if (requiredEffort === 'high' && (candidateEffort === 'low' || candidateEffort === 'minimal')) {
-      effortFitScore = -0.15; // Severe penalty for inadequate depth on high-effort role
-    } else if (requiredEffort === 'low' && (candidateEffort === 'high' || candidateEffort === 'xhigh')) {
-      effortFitScore = -0.10; // Penalty for wasteful high-effort reasoning on low-effort task
-    } else {
-      effortFitScore = -0.05; // Slight mismatch
-    }
-
-    // Economic Arbitrage Note & Logic
-    let arbitrageNote = `Standard route (scarcity: ${scarcityState}, burn: ${normalizedBurn}x, effort: ${candidateEffort || 'none'})`;
-    if (route.harness === 'antigravity' && route.provider_path === 'antigravity_3p_gateway') {
-      const nativeClaudePool = liveQuota['claude_pro'] || {};
-      const nativeRemaining = nativeClaudePool.windows?.seven_day?.percent_remaining ?? 100;
-      const agy3PRemaining = pool.windows?.weekly?.percent_remaining ?? 100;
-
-      if (nativeRemaining < 25 && agy3PRemaining > 80 && role !== 'critical_auditor') {
-        quotaBonus += 0.20;
-        arbitrageNote = `Arbitrage: Native Claude scarce (${nativeRemaining}%), AGY 3P abundant (${agy3PRemaining}%) -> routing to AGY 3P`;
-      }
-    }
-
-    if (role === 'critical_auditor') {
-      if (route.model_family === 'claude' || route.resolved_runtime_model.includes('opus') || route.resolved_runtime_model.includes('sol')) {
-        qualityScore += 0.25; // Massive quality anchor for irreversible audits
-      }
-    }
-
-    const finalScore = parseFloat((qualityScore + quotaBonus + effortFitScore).toFixed(4));
+  const scored = stageB.survivors.map((candidate) => {
+    const effortFit = effortFitScore(requiredEffort, candidate.route.reasoning_effort);
+    const economics = buildRouteEconomics({
+      route: candidate.route,
+      capability: candidate.capability,
+      poolEconomics,
+      observations: quotaEconomics,
+      candidateBasis: candidate.candidateBasis,
+      successProbability: candidate.qualityScore,
+      effortFitScore: effortFit,
+      now
+    });
+    const arbitrageNote = candidate.route.harness === 'antigravity' && candidate.route.provider_path === 'antigravity_3p_gateway'
+      ? `AGY 3P participates in staged economics (native Claude headroom: ${poolEconomics.claude_pro?.actual_remaining ?? 'unknown'}%)`
+      : `Staged economics (state: ${candidate.scarcityState}, expected successful burn: ${economics.expected_successful_quota_burn})`;
     return {
-      route,
-      capabilityStatus: metadata.capabilityStatus,
-      candidateBasis: metadata.candidateBasis,
-      real_n: metadata.capability?.real_n || 0,
-      exploration: metadata.exploration,
-      qualityScore,
-      quotaBonus,
-      effortFitScore,
-      finalScore,
-      scarcityState,
+      ...candidate,
+      economics,
+      effortFitScore: effortFit,
+      quotaBonus: 0,
+      finalScore: economics.economic_score,
+      scarcityState: candidate.scarcityState,
       arbitrageNote
     };
   });
-
-  // Sort descending by final score
-  scored.sort((a, b) => b.finalScore - a.finalScore);
-  const winner = scored[0];
+  const selected = selectEconomicRoute(scored);
+  const winner = selected.winner;
 
   return {
     role,
@@ -739,29 +809,69 @@ export function scoreAndSelectRoute({
     finalScore: winner.finalScore,
     arbitrageReason: winner.arbitrageNote,
     candidateRoutesCount: candidateRoutes.length,
-    viableCandidatesCount: viableCandidates.length,
+    viableCandidatesCount: stageA.survivors.length,
+    sufficientCandidatesCount: stageB.survivors.length,
+    qualityFloor: stageB.floor,
+    resourcePools: RESOURCE_POOLS,
     rejectedRoutes,
-    topCandidates: scored.slice(0, 4).map(s => ({
+    stages: {
+      stageA: {
+        input_count: capabilityQuery.candidates.length,
+        survivor_count: stageA.survivors.length,
+        rejected: stageA.rejected
+      },
+      stageB: {
+        quality_floor: stageB.floor,
+        input_count: stageA.survivors.length,
+        survivor_count: stageB.survivors.length,
+        rejected: stageB.rejected
+      },
+      stageC: {
+        input_count: stageB.survivors.length,
+        selected_route_id: winner.route.route_id,
+        ranking: selected.ranked.map((entry) => ({
+          route_id: entry.route.route_id,
+          economic_score: entry.economics.economic_score,
+          expected_successful_quota_burn: entry.economics.expected_successful_quota_burn
+        }))
+      }
+    },
+    poolEconomics,
+    selectedRouteEconomics: winner.economics,
+    topCandidates: selected.ranked.slice(0, 4).map(s => ({
       route_id: s.route.route_id,
       score: s.finalScore,
+      economic_score: s.economics.economic_score,
+      expected_successful_quota_burn: s.economics.expected_successful_quota_burn,
+      task_success_probability: s.economics.task_success_probability,
       effort_fit: s.effortFitScore,
       capability_status: s.capabilityStatus,
       candidate_basis: s.candidateBasis,
       real_n: s.real_n,
+      quality: s.qualityScore,
+      quality_source: s.qualityEvidence.source,
+      pool: s.economics.resource_pool,
+      surplus: s.economics.surplus,
+      pressure: s.economics.pressure,
       exploration: s.exploration,
       note: s.arbitrageNote
     })),
     liveQuotaPools: liveQuota,
-    allCandidates: scored.map(s => ({
+    allCandidates: selected.ranked.map(s => ({
       route_id: s.route.route_id,
       harness: s.route.harness,
       model: s.route.resolved_runtime_model,
       effort: s.route.reasoning_effort,
       score: s.finalScore,
+      economic_score: s.economics.economic_score,
+      expected_successful_quota_burn: s.economics.expected_successful_quota_burn,
+      task_success_probability: s.economics.task_success_probability,
+      quality: s.qualityScore,
       capability_status: s.capabilityStatus,
       candidate_basis: s.candidateBasis,
       real_n: s.real_n,
-      exploration: s.exploration
+      exploration: s.exploration,
+      economics: s.economics
     }))
   };
 }
@@ -1142,12 +1252,16 @@ export function dispatchThroughHerdr({
     candidateRouteSetMarker: null,
     routeDecision: {
       decision_type: 'router_v2',
+      scheduler: 'staged_v3_wp5_wp6',
       route_id: selectedRoute.route_id,
       harness: selectedRoute.harness,
       model: selectedRoute.resolved_runtime_model,
       effort: selectedRoute.reasoning_effort,
       score: decision.finalScore,
-      arbitrage_reason: decision.arbitrageReason
+      arbitrage_reason: decision.arbitrageReason,
+      quality_floor: decision.qualityFloor,
+      selected_route_economics: decision.selectedRouteEconomics,
+      stages: decision.stages
     },
     quotaSnapshotBefore: decision.liveQuotaPools,
     selectedRouteId: selectedRoute.route_id,
@@ -1363,7 +1477,10 @@ export function recordTaskCompletion(taskId, {
   resultSummary = '',
   exitCode = 0,
   routeExecutionId = null,
-  parentExecutionId = null
+  parentExecutionId = null,
+  tokensConsumed = null,
+  cacheEfficiency = null,
+  latencyMs = null
 } = {}) {
   const metaPath = homePath(path.join('state', `${taskId}.meta`));
   let meta = {};
@@ -1438,6 +1555,34 @@ export function recordTaskCompletion(taskId, {
     quotaSnapshotAfter = null;
   }
 
+  const completionRecords = readRoutingTelemetryRecords();
+  const startedRecord = completionRecords.find((entry) =>
+    (entry.route_execution_id === execId || entry.execution_id === execId) && entry.dispatch_status === 'started'
+  );
+  let economicsObservation = null;
+  if (startedRecord?.selected_route_id) {
+    try {
+      const { compiledRoutes } = loadConfigs();
+      const route = compiledRoutes.find((candidate) => candidate.route_id === startedRecord.selected_route_id);
+      const poolName = routePoolName(route);
+      const quotaDelta = calculateObservedQuotaDelta(startedRecord.quota_snapshot_before, quotaSnapshotAfter, poolName);
+      economicsObservation = {
+        route_id: startedRecord.selected_route_id,
+        resource_pool: poolName,
+        shared_meter: poolName === 'opencode_go',
+        expected_normalized_burn: route?.expected_normalized_burn ?? null,
+        observed_quota_delta_percent: quotaDelta?.percent_points ?? null,
+        observed_quota_delta_by_window: quotaDelta?.by_window ?? {},
+        evidence: quotaDelta ? 'real_quota_delta' : 'unavailable'
+      };
+    } catch (_) {
+      economicsObservation = null;
+    }
+  }
+  const actualTokenUsage = tokensConsumed ?? meta.tokens_consumed ?? meta.actual_token_usage ?? null;
+  const actualCacheEfficiency = cacheEfficiency ?? meta.cache_efficiency ?? null;
+  const actualLatencyMs = latencyMs ?? meta.latency_ms ?? null;
+
   const now = new Date().toISOString();
   const completedRecord = {
     route_execution_id: execId,
@@ -1456,6 +1601,10 @@ export function recordTaskCompletion(taskId, {
     artifact_path: hasReport ? `data/${taskId}/report.md` : null,
     result_summary: resultSummary || (hasReport ? fs.readFileSync(reportPath, 'utf8').slice(0, 300) : ''),
     quota_snapshot_after: quotaSnapshotAfter,
+    actual_token_usage: actualTokenUsage === null ? null : Number(actualTokenUsage),
+    cache_efficiency: actualCacheEfficiency === null ? null : Number(actualCacheEfficiency),
+    latency_ms: actualLatencyMs === null ? null : Number(actualLatencyMs),
+    economics_observation: economicsObservation,
     completed_at: now,
     timestamp: now
   };

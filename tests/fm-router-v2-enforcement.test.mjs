@@ -13,8 +13,11 @@ const {
   queryCapabilityCandidates,
   loadConfigs,
   resolveLiveQuotaPools,
-  dispatchThroughHerdr
+  dispatchThroughHerdr,
+  qualityFloorForTask,
+  stageBQualityGate
 } = router;
+const economics = await import('../bin/fm-routing-economics.mjs');
 
 const expected = {
   fast_precise: 'codex:gpt-5.6-luna:low',
@@ -260,4 +263,156 @@ assert.equal(resolveLiveQuotaPools().opencode_go.windows.weekly.percent_remainin
 process.env.PATH = originalPath;
 process.env.FM_DISABLE_LIVE_QUOTA = originalLiveQuota;
 delete process.env.FM_OPENCODE_QUOTA_SCRIPT;
+
+// WP5/WP6 economics and staged scheduler evidence.
+const stagedHome = makeRouterFixtureHome();
+const stagedState = loadConfigs();
+const stagedRoutes = stagedState.compiledRoutes;
+const stagedLearnedPath = path.join(stagedHome, 'data', 'learned-routing.json');
+const stagedLearned = stagedState.learned;
+function setRefactorEvidence(routeId, posteriorMean) {
+  const record = stagedLearned.route_capabilities[routeId]?.capabilities?.refactor;
+  assert.ok(record, `fixture must contain refactor evidence for ${routeId}`);
+  record.real_n = 15;
+  record.real_successes = Math.round(posteriorMean * 15);
+  record.posterior_mean = posteriorMean;
+  record.routing_status = 'ROUTING_ELIGIBLE';
+}
+setRefactorEvidence('codex:gpt-5.6-terra:medium', 0.96);
+setRefactorEvidence('agy-3p:claude-sonnet-4-6', 0.93);
+fs.writeFileSync(stagedLearnedPath, `${JSON.stringify(stagedLearned, null, 2)}\n`);
+
+const observedBefore = {
+  opencode_go: { windows: { weekly: { percent_remaining: 90 } } }
+};
+const observedAfter = {
+  opencode_go: { windows: { weekly: { percent_remaining: 85 } } }
+};
+const observedDelta = economics.calculateObservedQuotaDelta(observedBefore, observedAfter, 'opencode_go');
+assert.equal(observedDelta.percent_points, 5);
+const qwenRoute = stagedRoutes.find((route) => route.route_id === 'opencode:qwen3.7-max');
+const qwenCapability = stagedLearned.route_capabilities[qwenRoute.route_id].capabilities.refactor;
+const observedTelemetry = economics.collectRoutingObservations([
+  {
+    route_execution_id: 'observed-qwen',
+    dispatch_status: 'started',
+    selected_route_id: qwenRoute.route_id,
+    quota_snapshot_before: observedBefore,
+    started_at: '2026-09-15T00:00:00.000Z'
+  },
+  {
+    route_execution_id: 'observed-qwen',
+    dispatch_status: 'completed',
+    terminal_state: 'SUCCESS',
+    quota_snapshot_after: observedAfter,
+    completed_at: '2026-09-15T00:00:10.000Z',
+    actual_token_usage: 1200
+  }
+], [qwenRoute], new Date('2026-09-15T01:00:00.000Z'));
+const observedPoolEconomics = economics.buildPoolEconomics({
+  pools: { opencode_go: { status: 'HEALTHY', windows: { weekly: { percent_remaining: 85 } } } },
+  observations: observedTelemetry,
+  now: new Date('2026-09-15T01:00:00.000Z')
+});
+const observedRouteEconomics = economics.buildRouteEconomics({
+  route: qwenRoute,
+  capability: qwenCapability,
+  poolEconomics: observedPoolEconomics,
+  observations: observedTelemetry
+});
+assert.equal(observedRouteEconomics.burn_evidence, 'real_quota_delta');
+assert.equal(observedRouteEconomics.actual_token_usage, 1200);
+assert.equal(
+  observedRouteEconomics.expected_successful_quota_burn,
+  Number((observedRouteEconomics.expected_quota_burn_per_attempt / observedRouteEconomics.task_success_probability).toFixed(6))
+);
+
+const paced = economics.computeBudgetPacing({
+  windows: { rolling: { percent_remaining: 80, reset_at: '2026-09-15T02:00:00.000Z' } },
+  recentBurnVelocity: 1,
+  now: new Date('2026-09-15T01:00:00.000Z')
+});
+assert.equal(paced.target_remaining, 20);
+assert.equal(paced.actual_remaining, 80);
+assert.equal(paced.surplus, 60);
+assert.ok(paced.pressure > 0);
+
+const oldFlatWinner = {
+  route: { route_id: 'expiring-low', model_family: 'test', resolved_runtime_model: 'test-low' },
+  capability: { posterior_mean: 0.79, real_n: 15 }
+};
+const oldFlatSufficient = {
+  route: { route_id: 'scarce-sufficient', model_family: 'test', resolved_runtime_model: 'test-sufficient' },
+  capability: { posterior_mean: 0.90, real_n: 15 }
+};
+const oldFlatLowScore = 0.79 + 0.15 + 0.05;
+const oldFlatSufficientScore = 0.90 - 0.10 + 0.05;
+assert.ok(oldFlatLowScore > oldFlatSufficientScore);
+const qualityGateEvidence = stageBQualityGate({
+  candidates: [oldFlatWinner, oldFlatSufficient],
+  taskClass: 'refactor',
+  qualityFloor: 0.88,
+  learned: { model_family_priors: {} },
+  priors: { priors: {} }
+});
+assert.ok(qualityGateEvidence.rejected.some((entry) => entry.route_id === 'expiring-low'));
+assert.deepEqual(qualityGateEvidence.survivors.map((entry) => entry.route.route_id), ['scarce-sufficient']);
+const useBeforeResetPool = economics.buildPoolEconomics({
+  pools: {
+    antigravity_3p: {
+      status: 'HEALTHY',
+      windows: { weekly: { percent_remaining: 80, reset_at: '2026-09-15T02:00:00.000Z' } }
+    }
+  },
+  now: new Date('2026-09-15T01:00:00.000Z')
+}).antigravity_3p;
+assert.equal(useBeforeResetPool.scarcity_state, 'USE_BEFORE_RESET');
+assert.ok(useBeforeResetPool.expected_unused_quota_at_reset > 0);
+
+const stagedDecision = router.scoreAndSelectRoute({
+  role: 'general_engineer',
+  taskClass: 'refactor',
+  dataClass: 'PUBLIC',
+  useLiveAxi: false,
+  telemetryRecords: []
+});
+assert.equal(stagedDecision.qualityFloor, qualityFloorForTask({ taskClass: 'refactor' }));
+assert.ok(stagedDecision.allCandidates.length >= 3, 'staged fixture must expose multiple sufficient economic routes');
+assert.ok(stagedDecision.allCandidates.every((candidate) => candidate.economics.expected_successful_quota_burn > 0));
+
+const floorDecision = router.scoreAndSelectRoute({
+  role: 'general_engineer',
+  taskClass: 'refactor',
+  dataClass: 'PUBLIC',
+  qualityFloor: 0.95,
+  useLiveAxi: false,
+  telemetryRecords: []
+});
+assert.equal(floorDecision.selectedRoute.route_id, 'codex:gpt-5.6-terra:medium');
+assert.ok(floorDecision.stages.stageB.rejected.some((entry) => entry.route_id === 'agy-3p:claude-sonnet-4-6'));
+assert.ok(floorDecision.stages.stageB.rejected.some((entry) => entry.reason.includes('Quality floor rejected')));
+
+const agyEarlyDecision = router.scoreAndSelectRoute({
+  role: 'general_engineer',
+  taskClass: 'refactor',
+  dataClass: 'PUBLIC',
+  useLiveAxi: false,
+  telemetryRecords: [],
+  quotaOverrides: {
+    codex_plus: { status: 'HEALTHY', windows: { rolling_5h: { percent_remaining: 60 } } },
+    claude_pro: { status: 'HEALTHY', windows: { seven_day: { percent_remaining: 80 } } },
+    antigravity_3p: { status: 'HEALTHY', windows: { weekly: { percent_remaining: 100 } } }
+  }
+});
+assert.equal(agyEarlyDecision.poolEconomics.claude_pro.actual_remaining > 25, true);
+assert.equal(agyEarlyDecision.selectedRoute.route_id, 'agy-3p:claude-sonnet-4-6');
+assert.equal(agyEarlyDecision.selectedRouteEconomics.resource_pool, 'antigravity_3p');
+assert.equal(agyEarlyDecision.selectedRouteEconomics.shared_meter, false);
+assert.deepEqual(Object.keys(agyEarlyDecision.poolEconomics).filter((name) => name.startsWith('opencode_go')), ['opencode_go']);
+
+const opencodeCandidate = stagedDecision.allCandidates.find((candidate) => candidate.route_id === 'opencode:qwen3.7-max');
+assert.ok(opencodeCandidate, 'OpenCode Go remains in the economic candidate set');
+assert.equal(opencodeCandidate.economics.account_pool, 'opencode_go');
+assert.equal(opencodeCandidate.economics.shared_meter, true);
+assert.equal(opencodeCandidate.economics.model_burn_multiplier, 12.5);
 console.log('Router V2 enforcement and ten-role regression fixtures passed');
