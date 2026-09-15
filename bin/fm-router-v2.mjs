@@ -130,6 +130,34 @@ function unknownQuotaMap(quotaMap, reason) {
   };
 }
 
+const CATALOG_REFRESH_TIMEOUT_MS = 180000;
+
+// Dispatch-time freshness for generated RouteTargets.  A missing or stale compiled
+// catalog is regenerated once through the provider discovery owner; if that still
+// leaves no fresh catalog, loadConfigs keeps failing closed with no routes.
+export function ensureRouteCatalogFresh({ refresher = null } = {}) {
+  const compiledRoutesPath = homePath('data/provider-catalogs/compiled-route-targets.json');
+  if (fs.existsSync(compiledRoutesPath) && generatedStateFresh(compiledRoutesPath)) {
+    return { fresh: true, refreshed: false };
+  }
+  try {
+    if (refresher) {
+      refresher({ home: currentFmHome() });
+    } else {
+      execFileSync(process.execPath, [path.join(ROOT, 'bin', 'fm-provider-discovery.mjs'), 'refresh'], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+        timeout: CATALOG_REFRESH_TIMEOUT_MS,
+        env: { ...process.env, FM_HOME: currentFmHome() }
+      });
+    }
+  } catch (error) {
+    return { fresh: false, refreshed: false, error: String(error.stderr || error.message).slice(0, 500) };
+  }
+  const fresh = fs.existsSync(compiledRoutesPath) && generatedStateFresh(compiledRoutesPath);
+  return { fresh, refreshed: fresh, ...(fresh ? {} : { error: 'provider discovery did not produce a fresh compiled catalog' }) };
+}
+
 export function loadConfigs() {
   const registryPath = homePath('config/model-registry.json');
   const policyPath = homePath('config/routing-policy.json');
@@ -286,6 +314,27 @@ export const ROLE_DEFAULT_EFFORT = {
   cheap_tool_worker: 'low'
 };
 
+// Bootstrap path for an evidence-thin home: a non-critical task that is not
+// retry-tolerant may still use a catalog ROUTING_ELIGIBLE route whose curated seed
+// prior (config/routing-priors.json) names this role and this harness.  Stage B
+// still applies the task-class quality floor to that prior, and real outcomes
+// replace it as the evaluation lifecycle records them.
+export function seedPriorAdmission({ route, role, critical = false, priors = null } = {}) {
+  if (critical) return { admitted: false, reason: 'critical tasks require real capability evidence' };
+  if (route?.routing_status !== 'ROUTING_ELIGIBLE') {
+    return { admitted: false, reason: `catalog status ${route?.routing_status || 'unknown'} is not ROUTING_ELIGIBLE` };
+  }
+  const prior = priorForRoute(route, priors);
+  if (!prior) return { admitted: false, reason: 'no seed prior for this route' };
+  if (prior.harness && prior.harness !== route.harness) {
+    return { admitted: false, reason: `seed prior is for harness ${prior.harness}` };
+  }
+  if (!Array.isArray(prior.recommended_roles) || !prior.recommended_roles.includes(role)) {
+    return { admitted: false, reason: `seed prior does not recommend role ${role}` };
+  }
+  return { admitted: true, reason: 'seed prior recommends this role' };
+}
+
 export function queryCapabilityCandidates({
   role,
   taskClass = null,
@@ -294,6 +343,7 @@ export function queryCapabilityCandidates({
   retryTolerant = false,
   policy = {},
   learned = null,
+  priors = null,
   compiledRoutes = []
 } = {}) {
   const selectedTaskClass = taskClass || taskClassForRole(role);
@@ -329,10 +379,13 @@ export function queryCapabilityCandidates({
       resolvedRuntimeModel: route.resolved_runtime_model,
       evaluateDataGate
     });
-    if (!realEvidence && !exploration.eligible) {
+    const seedPrior = !realEvidence && !exploration.eligible
+      ? seedPriorAdmission({ route, role, critical, priors })
+      : null;
+    if (!realEvidence && !exploration.eligible && !seedPrior.admitted) {
       rejected.push({
         route_id: route.route_id,
-        reason: `Capability evidence unavailable for ${selectedTaskClass}; exploration blocked: ${exploration.reasons.join('; ') || exploration.phase}`
+        reason: `Capability evidence unavailable for ${selectedTaskClass}; exploration blocked: ${exploration.reasons.join('; ') || exploration.phase}; seed prior not admitted: ${seedPrior.reason}`
       });
       continue;
     }
@@ -342,7 +395,7 @@ export function queryCapabilityCandidates({
       capabilityStatus,
       realEvidence,
       exploration,
-      candidateBasis: realEvidence ? 'real_evidence' : 'exploration'
+      candidateBasis: realEvidence ? 'real_evidence' : (exploration.eligible ? 'exploration' : 'seed_prior')
     });
   }
   return { taskClass: selectedTaskClass, criteria, candidates, rejected };
@@ -752,6 +805,7 @@ export function scoreAndSelectRoute({
     retryTolerant,
     policy,
     learned,
+    priors,
     compiledRoutes
   });
   const selectedTaskClass = capabilityQuery.taskClass;
@@ -1237,10 +1291,17 @@ export function dispatchThroughHerdr({
   attemptNumber = 1,
   retryCount = 0,
   useLiveAxi = true,
-  backend = 'herdr'
+  backend = 'herdr',
+  refreshCatalog = true
 }) {
   if (!dataClass || dataClass === 'UNKNOWN') {
     throw new Error('dispatchThroughHerdr: dataClass is required and must not be empty or UNKNOWN (fail-closed policy)');
+  }
+  if (refreshCatalog) {
+    const catalog = ensureRouteCatalogFresh();
+    if (!catalog.fresh) {
+      throw new Error(`dispatchThroughHerdr: RouteTarget catalog is missing or stale and could not be refreshed: ${catalog.error}`);
+    }
   }
   let effectiveExcludes = [...excludeRoutes];
   if (diagnosticConstraint === 'non_agy_observer') {
@@ -1427,7 +1488,8 @@ export function dispatchThroughHerdr({
         attemptNumber: attemptNumber + 1,
         retryCount: retryCount + 1,
         useLiveAxi,
-        backend
+        backend,
+        refreshCatalog: false
       });
     } catch (retryError) {
       return { success: false, taskId, executionId: execId, routeExecutionId: execId, routeDecision: decision, selectedRoute, spawnOutput: '', error: retryError.message };
@@ -1672,6 +1734,64 @@ export function teardownTask(taskId, { force = false } = {}) {
   }
 }
 
+// Router dispatch provenance: fm-spawn accepts a fresh worker as router-selected
+// only when the executions log already holds this task's router_v2 selection for
+// the same execution, route, and harness.  Passing the flags by hand is not enough.
+export function verifyRouterProvenance({ taskId, routeExecutionId, routeId, harness, model = null } = {}) {
+  if (!taskId || !routeExecutionId || !routeId || !harness) {
+    return { verified: false, reason: 'task id, route execution id, route id, and harness are all required' };
+  }
+  const selection = readRoutingTelemetryRecords().find((record) =>
+    record.route_execution_id === routeExecutionId &&
+    record.dispatch_status === 'started' &&
+    record.dispatch_path === 'A'
+  );
+  if (!selection) return { verified: false, reason: `no router selection is recorded for execution ${routeExecutionId}` };
+  const mismatches = [];
+  if (selection.task_id !== taskId) mismatches.push(`task ${selection.task_id}`);
+  if (selection.route_decision?.decision_type !== 'router_v2') mismatches.push(`decision ${selection.route_decision?.decision_type}`);
+  if (selection.selected_route_id !== routeId) mismatches.push(`route ${selection.selected_route_id}`);
+  if (selection.selected_harness !== harness) mismatches.push(`harness ${selection.selected_harness}`);
+  if (model && selection.selected_model !== model) mismatches.push(`model ${selection.selected_model}`);
+  if (mismatches.length > 0) {
+    return { verified: false, reason: `recorded router selection differs: ${mismatches.join(', ')}` };
+  }
+  return { verified: true, reason: 'router selection recorded' };
+}
+
+// A manual override replaces the router's route choice, never the data policy.
+// The chosen harness (and model, when concrete) is matched against the compiled
+// catalog regardless of its age, because data profiles do not go stale with quota.
+export function evaluateManualOverrideDataGate({ harness, model = null, dataClass } = {}) {
+  if (!dataClass || !ACTIVE_DATA_CLASSES.has(dataClass)) {
+    return { allowed: false, reason: `a manual override needs a known data class, got ${dataClass || 'none'}` };
+  }
+  if (dataClass === 'SECRET') {
+    return { allowed: false, reason: 'SECRET data is strictly excluded from all model context under any provider' };
+  }
+  const compiledRoutesPath = homePath('data/provider-catalogs/compiled-route-targets.json');
+  let routes = [];
+  try {
+    routes = JSON.parse(fs.readFileSync(compiledRoutesPath, 'utf8'));
+  } catch {
+    routes = [];
+  }
+  const concreteModel = model && model !== 'default' ? model : null;
+  const matched = routes.filter((route) => route.harness === harness && route.data_profile &&
+    (!concreteModel || route.resolved_runtime_model === concreteModel));
+  if (matched.length === 0) {
+    if (dataClass === 'PERSONAL_SENSITIVE') {
+      return { allowed: false, reason: `PERSONAL_SENSITIVE needs a catalogued route; ${harness}${concreteModel ? `/${concreteModel}` : ''} has none` };
+    }
+    return { allowed: true, reason: 'no catalogued route for this choice; data class needs no per-route verification', matched_routes: [] };
+  }
+  for (const route of matched) {
+    const gate = evaluateDataGate(dataClass, route.data_profile, { resolvedRuntimeModel: route.resolved_runtime_model });
+    if (!gate.allowed) return { allowed: false, reason: gate.reason, matched_routes: matched.map((r) => r.route_id) };
+  }
+  return { allowed: true, reason: 'data class permitted on every matching route', matched_routes: matched.map((r) => r.route_id) };
+}
+
 function parseCliFlags(argv) {
   const flags = {};
   for (let i = 0; i < argv.length; i++) {
@@ -1715,6 +1835,44 @@ if (process.argv[1] && process.argv[1].endsWith('fm-router-v2.mjs')) {
     }
     const res = scoreAndSelectRoute({ role, dataClass, targetEffort: effort });
     console.log(JSON.stringify(res, null, 2));
+  } else if (cmd === 'dispatch' && (process.argv[3] || '').startsWith('--')) {
+    // Flag form is the normal crewmate/scout dispatch entrypoint.
+    const flags = parseCliFlags(process.argv.slice(3));
+    const scout = Boolean(flags.scout);
+    if (!flags['task-id'] || !flags['data-class'] || !flags.project || (!scout && (!flags.mode || !flags.yolo))) {
+      console.error('Usage: fm-router-v2.mjs dispatch --task-id <id> --project <dir> --data-class <class> [--role <role>] [--task-class <class>] (--scout | --mode <mode> --yolo <on|off>) [--effort <level>] [--retry-tolerant] [--critical] [--backend <name>]');
+      process.exit(1);
+    }
+    try {
+      const res = dispatchThroughHerdr({
+        taskId: flags['task-id'],
+        role: flags.role || 'general_engineer',
+        taskClass: flags['task-class'] || null,
+        dataClass: flags['data-class'],
+        targetEffort: flags.effort || null,
+        critical: Boolean(flags.critical),
+        retryTolerant: Boolean(flags['retry-tolerant']),
+        intent: flags.intent || `Task ${flags['task-id']}`,
+        spec: flags.spec || '',
+        scout,
+        projectDir: path.resolve(flags.project),
+        mode: flags.mode || 'local-only',
+        yolo: flags.yolo || 'off',
+        ...(flags.backend ? { backend: flags.backend } : {})
+      });
+      const { routeDecision, contextPack, ...summary } = res;
+      console.log(JSON.stringify({
+        ...summary,
+        role: routeDecision?.role,
+        taskClass: routeDecision?.taskClass,
+        finalScore: routeDecision?.finalScore,
+        topCandidates: routeDecision?.topCandidates
+      }, null, 2));
+      process.exit(res.success ? 0 : 1);
+    } catch (e) {
+      console.error(`DISPATCH ERROR: ${e.message}`);
+      process.exit(1);
+    }
   } else if (cmd === 'dispatch') {
     const taskId = process.argv[3];
     const role = process.argv[4] || 'general_engineer';
@@ -1745,10 +1903,21 @@ if (process.argv[1] && process.argv[1].endsWith('fm-router-v2.mjs')) {
   } else if (cmd === 'ingress-start') {
     const flags = parseCliFlags(process.argv.slice(3));
     const isSecondmateRelaunch = Boolean(flags['secondmate-relaunch']);
-    const dispatchType = isSecondmateRelaunch ? 'system_internal_relaunch' : 'task_dispatch';
-    const marker = isSecondmateRelaunch
-      ? 'system-internal relaunch, no candidate set evaluated'
-      : 'legacy/manual decision, no candidate set evaluated';
+    const isRecoveryRelaunch = Boolean(flags['recovery-relaunch']);
+    const overrideReason = typeof flags['manual-override'] === 'string' ? flags['manual-override'] : null;
+    const dispatchType = isSecondmateRelaunch || isRecoveryRelaunch ? 'system_internal_relaunch' : 'task_dispatch';
+    let decisionType = 'legacy_manual';
+    let marker = 'legacy/manual decision, no candidate set evaluated';
+    if (isSecondmateRelaunch) {
+      decisionType = 'system_internal_relaunch';
+      marker = 'system-internal relaunch, no candidate set evaluated';
+    } else if (isRecoveryRelaunch) {
+      decisionType = 'recovery_relaunch';
+      marker = 'recovery relaunch of an existing task, no candidate set evaluated';
+    } else if (overrideReason) {
+      decisionType = 'manual_override';
+      marker = 'explicit manual override, no candidate set evaluated';
+    }
     const entry = ingressDispatchStarted({
       taskId: flags['task-id'],
       routeExecutionId: flags['route-execution-id'],
@@ -1760,8 +1929,10 @@ if (process.argv[1] && process.argv[1].endsWith('fm-router-v2.mjs')) {
       candidateRoutes: null,
       candidateRouteSetMarker: marker,
       routeDecision: {
-        decision_type: isSecondmateRelaunch ? 'system_internal_relaunch' : 'legacy_manual',
+        decision_type: decisionType,
         marker,
+        ...(overrideReason ? { override_reason: overrideReason.slice(0, 500) } : {}),
+        ...(flags['router-authority'] ? { router_authority: flags['router-authority'] } : {}),
         harness: flags['harness'] || 'default',
         model: flags['model'] || 'default',
         effort: flags['effort'] || 'default',
@@ -1778,7 +1949,7 @@ if (process.argv[1] && process.argv[1].endsWith('fm-router-v2.mjs')) {
     console.log(JSON.stringify(entry));
   } else if (cmd === 'ingress-launching') {
     const flags = parseCliFlags(process.argv.slice(3));
-    const isSecondmateRelaunch = Boolean(flags['secondmate-relaunch']);
+    const isSecondmateRelaunch = Boolean(flags['secondmate-relaunch'] || flags['recovery-relaunch']);
     const dispatchType = isSecondmateRelaunch ? 'system_internal_relaunch' : 'task_dispatch';
     const entry = ingressDispatchLaunching({
       taskId: flags['task-id'],
@@ -1796,7 +1967,7 @@ if (process.argv[1] && process.argv[1].endsWith('fm-router-v2.mjs')) {
     console.log(JSON.stringify(entry));
   } else if (cmd === 'ingress-dispatched') {
     const flags = parseCliFlags(process.argv.slice(3));
-    const isSecondmateRelaunch = Boolean(flags['secondmate-relaunch']);
+    const isSecondmateRelaunch = Boolean(flags['secondmate-relaunch'] || flags['recovery-relaunch']);
     const dispatchType = isSecondmateRelaunch ? 'system_internal_relaunch' : 'task_dispatch';
     const entry = ingressDispatchDispatched({
       taskId: flags['task-id'],
@@ -1817,7 +1988,7 @@ if (process.argv[1] && process.argv[1].endsWith('fm-router-v2.mjs')) {
     console.log(JSON.stringify(entry));
   } else if (cmd === 'ingress-running') {
     const flags = parseCliFlags(process.argv.slice(3));
-    const isSecondmateRelaunch = Boolean(flags['secondmate-relaunch']);
+    const isSecondmateRelaunch = Boolean(flags['secondmate-relaunch'] || flags['recovery-relaunch']);
     const dispatchType = isSecondmateRelaunch ? 'system_internal_relaunch' : 'task_dispatch';
     const entry = ingressDispatchRunning({
       taskId: flags['task-id'],
@@ -1842,7 +2013,7 @@ if (process.argv[1] && process.argv[1].endsWith('fm-router-v2.mjs')) {
     console.log(JSON.stringify(entry));
   } else if (cmd === 'ingress-failed') {
     const flags = parseCliFlags(process.argv.slice(3));
-    const isSecondmateRelaunch = Boolean(flags['secondmate-relaunch']);
+    const isSecondmateRelaunch = Boolean(flags['secondmate-relaunch'] || flags['recovery-relaunch']);
     const dispatchType = isSecondmateRelaunch ? 'system_internal_relaunch' : 'task_dispatch';
     const entry = ingressDispatchFailed({
       taskId: flags['task-id'],
@@ -1855,6 +2026,30 @@ if (process.argv[1] && process.argv[1].endsWith('fm-router-v2.mjs')) {
       dispatchType
     });
     console.log(JSON.stringify(entry));
+  } else if (cmd === 'verify-provenance') {
+    const flags = parseCliFlags(process.argv.slice(3));
+    const res = verifyRouterProvenance({
+      taskId: flags['task-id'],
+      routeExecutionId: flags['route-execution-id'],
+      routeId: flags['route-id'],
+      harness: flags['harness'],
+      model: flags['model'] && flags['model'] !== 'default' ? flags['model'] : null
+    });
+    console.log(JSON.stringify(res));
+    process.exit(res.verified ? 0 : 1);
+  } else if (cmd === 'override-gate') {
+    const flags = parseCliFlags(process.argv.slice(3));
+    const res = evaluateManualOverrideDataGate({
+      harness: flags['harness'],
+      model: flags['model'] || null,
+      dataClass: flags['data-class']
+    });
+    console.log(JSON.stringify(res));
+    process.exit(res.allowed ? 0 : 1);
+  } else if (cmd === 'catalog-refresh-if-stale') {
+    const res = ensureRouteCatalogFresh();
+    console.log(JSON.stringify(res));
+    process.exit(res.fresh ? 0 : 1);
   } else if (cmd === 'complete') {
     const taskId = process.argv[3];
     const state = process.argv[4] || 'SUCCESS';

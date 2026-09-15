@@ -51,6 +51,14 @@
 #   --role and --data-class are optional canonical Router V2 provenance fields
 #   for a fresh routed worker dispatch. --route-id records the selected
 #   RouteTarget. Relaunch preserves these fields from the existing task record.
+#   --manual-override <reason> is the audited escape hatch from router dispatch
+#   authority for a fresh crewmate or scout: the explicit harness/model choice is
+#   recorded as decision_type=manual_override with the reason, and with
+#   --data-class the choice must still pass the data policy. Where
+#   config/router-authority is enforced (the default in a home carrying
+#   config/model-registry.json), a fresh crewmate or scout spawn needs either a
+#   router selection that `fm-router-v2.mjs verify-provenance` finds in the
+#   executions log or this flag plus --data-class; `advisory` keeps legacy spawns.
 #   --backend <name> is the explicit runtime session-provider backend for this
 #   exact task only (docs/configuration.md "Runtime backend" owns when that flag
 #   is authorized). Without it, the script resolves FM_BACKEND, then
@@ -465,6 +473,8 @@ CONTEXT_PACK=
 MODE=
 YOLO=
 TRACEPARENT_ARG=
+MANUAL_OVERRIDE=
+MANUAL_OVERRIDE_SET=0
 HARNESS_SET=0
 MODEL_SET=0
 EFFORT_SET=0
@@ -500,6 +510,7 @@ for a in "$@"; do
       mode) MODE=$a; MODE_SET=1 ;;
       yolo) YOLO=$a; YOLO_SET=1 ;;
       traceparent) TRACEPARENT_ARG=$a; TRACEPARENT_SET=1 ;;
+      manual_override) MANUAL_OVERRIDE=$a; MANUAL_OVERRIDE_SET=1 ;;
       *) echo "error: internal parser state for --$want_value" >&2; exit 1 ;;
     esac
     want_value=
@@ -535,6 +546,8 @@ for a in "$@"; do
     --yolo=*) YOLO=${a#--yolo=}; YOLO_SET=1 ;;
     --traceparent) want_value=traceparent ;;
     --traceparent=*) TRACEPARENT_ARG=${a#--traceparent=}; TRACEPARENT_SET=1 ;;
+    --manual-override) want_value=manual_override ;;
+    --manual-override=*) MANUAL_OVERRIDE=${a#--manual-override=}; MANUAL_OVERRIDE_SET=1 ;;
     *) POS+=("$a") ;;
   esac
 done
@@ -552,6 +565,13 @@ done
 [ "$MODE_SET" -eq 0 ] || [ -n "$MODE" ] || { echo "error: --mode requires a non-empty value" >&2; exit 1; }
 [ "$YOLO_SET" -eq 0 ] || [ -n "$YOLO" ] || { echo "error: --yolo requires a non-empty value" >&2; exit 1; }
 [ "$TRACEPARENT_SET" -eq 0 ] || [ -n "$TRACEPARENT_ARG" ] || { echo "error: --traceparent requires a non-empty value" >&2; exit 1; }
+[ "$MANUAL_OVERRIDE_SET" -eq 0 ] || [ -n "${MANUAL_OVERRIDE//[[:space:]]/}" ] || { echo "error: --manual-override requires a non-empty reason" >&2; exit 1; }
+if [ "$MANUAL_OVERRIDE_SET" -eq 1 ]; then
+  MANUAL_OVERRIDE=${MANUAL_OVERRIDE//$'\n'/ }
+  [ "$RELAUNCH" -eq 0 ] || { echo "error: --manual-override applies to a fresh crewmate or scout spawn, not --relaunch" >&2; exit 1; }
+  [ "$KIND" != secondmate ] || { echo "error: --manual-override applies to crewmate and scout spawns; a secondmate spawn is not a routed task dispatch" >&2; exit 1; }
+  [ "$ROUTE_EXECUTION_ID_SET" -eq 0 ] || { echo "error: --manual-override cannot be combined with a router-selected --route-execution-id" >&2; exit 1; }
+fi
 if [ "$ROUTE_EXECUTION_ID_SET" -eq 0 ]; then
   ROUTE_EXECUTION_ID="rex-$(date +%s%3N)-$((RANDOM % 1000))"
 fi
@@ -1150,6 +1170,8 @@ if [ "${#POS[@]}" -gt 0 ] && [ "${POS[0]}" != "$idpart" ] && case "$idpart" in *
   [ -z "$MODEL" ] || shared_args+=(--model "$MODEL")
   [ -z "$EFFORT" ] || shared_args+=(--effort "$EFFORT")
   [ -z "$BACKEND_ARG" ] || shared_args+=(--backend "$BACKEND_ARG")
+  [ -z "$DATA_CLASS" ] || shared_args+=(--data-class "$DATA_CLASS")
+  [ "$MANUAL_OVERRIDE_SET" -eq 0 ] || shared_args+=("--manual-override=$MANUAL_OVERRIDE")
   # One delivery contract applies to every pair in a batch, exactly like the shared
   # harness. Each pair still re-validates it against its own brief, so a batch
   # spanning several modes is two invocations rather than a silent mixed dispatch.
@@ -1716,6 +1738,48 @@ fi
 if [ "$KIND" = secondmate ] && [ "$HARNESS" = rovo ]; then
   echo "error: rovo is a verified crewmate/scout adapter only and cannot run a secondmate; it has no primary supervision protocol. Select a harness verified for secondmates." >&2
   exit 1
+fi
+
+# Router dispatch authority (docs/router-v2.md "Dispatch authority").
+# config/router-authority selects enforced or advisory; absent, a home carrying
+# Router V3 static inputs is enforced and any other home is advisory. Enforced,
+# a fresh crewmate or scout spawn must either carry a router selection already
+# recorded in the executions log or an explicit --manual-override reason with a
+# data class the chosen harness may receive. Relaunches and secondmate spawns
+# are recorded as system dispatches instead.
+ROUTER_AUTHORITY=advisory
+if [ -f "$CONFIG/router-authority" ]; then
+  ROUTER_AUTHORITY=$(tr -d '[:space:]' < "$CONFIG/router-authority")
+  case "$ROUTER_AUTHORITY" in
+    enforced|advisory) ;;
+    *) echo "error: config/router-authority must be enforced or advisory (got '$ROUTER_AUTHORITY')" >&2; exit 1 ;;
+  esac
+elif [ -f "$CONFIG/model-registry.json" ]; then
+  ROUTER_AUTHORITY=enforced
+fi
+if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ]; then
+  if [ "$ROUTE_EXECUTION_ID_SET" -eq 1 ]; then
+    if [ "$ROUTER_AUTHORITY" = enforced ] && ! router_provenance=$(FM_HOME="$FM_HOME" node "$FM_ROOT/bin/fm-router-v2.mjs" verify-provenance \
+        --task-id "$ID" --route-execution-id "$ROUTE_EXECUTION_ID" --route-id "${ROUTE_ID:-}" \
+        --harness "$HARNESS" --model "${MODEL:-default}" 2>&1); then
+      echo "error: router dispatch authority is enforced and this spawn's router selection could not be verified: $router_provenance" >&2
+      exit 1
+    fi
+  elif [ "$MANUAL_OVERRIDE_SET" -eq 1 ]; then
+    if [ "$ROUTER_AUTHORITY" = enforced ] && [ -z "$DATA_CLASS" ]; then
+      echo "error: a manual override under enforced router authority needs --data-class so the data policy still applies" >&2
+      exit 1
+    fi
+    if [ -n "$DATA_CLASS" ] && ! override_gate=$(FM_HOME="$FM_HOME" node "$FM_ROOT/bin/fm-router-v2.mjs" override-gate \
+        --harness "$HARNESS" --model "${MODEL:-default}" --data-class "$DATA_CLASS" 2>&1); then
+      echo "error: manual override refused by data policy: $override_gate" >&2
+      exit 1
+    fi
+    echo "router: manual override for $ID harness=$HARNESS model=${MODEL:-default} reason: $MANUAL_OVERRIDE" >&2
+  elif [ "$ROUTER_AUTHORITY" = enforced ]; then
+    echo "error: router dispatch authority is enforced in this home; dispatch through 'node bin/fm-router-v2.mjs dispatch --task-id $ID ...', or pass --manual-override \"<reason>\" --data-class <class> for an explicit harness choice" >&2
+    exit 1
+  fi
 fi
 
 case "$HARNESS" in
@@ -4007,6 +4071,8 @@ if [ "$ROUTE_EXECUTION_ID_SET" -eq 0 ]; then
   extra_relaunch_flag=()
   if [ "$is_secondmate_relaunch" -eq 1 ]; then
     extra_relaunch_flag=("--secondmate-relaunch")
+  elif [ "$RELAUNCH" -eq 1 ]; then
+    extra_relaunch_flag=("--recovery-relaunch")
   fi
   node "$FM_ROOT/bin/fm-router-v2.mjs" ingress-start \
     --task-id "$ID" \
@@ -4019,6 +4085,8 @@ if [ "$ROUTE_EXECUTION_ID_SET" -eq 0 ]; then
     --model "${MODEL:-default}" \
     --effort "${EFFORT:-default}" \
     --route-id "${ROUTE_ID:-}" \
+    --router-authority "$ROUTER_AUTHORITY" \
+    ${MANUAL_OVERRIDE:+"--manual-override=$MANUAL_OVERRIDE"} \
     ${extra_relaunch_flag[@]+"${extra_relaunch_flag[@]}"} \
     >/dev/null 2>&1 || true
   node "$FM_ROOT/bin/fm-router-v2.mjs" ingress-launching \
@@ -4332,6 +4400,8 @@ if [ "$SPAWN_BACKLOG_COMMIT_STATUS" -ne 0 ]; then
     extra_relaunch_flag=()
     if [ "$is_secondmate_relaunch" -eq 1 ]; then
       extra_relaunch_flag=("--secondmate-relaunch")
+    elif [ "$RELAUNCH" -eq 1 ]; then
+      extra_relaunch_flag=("--recovery-relaunch")
     fi
     node "$FM_ROOT/bin/fm-router-v2.mjs" ingress-failed \
       --task-id "$ID" \
@@ -4372,6 +4442,8 @@ if [ "$ROUTE_EXECUTION_ID_SET" -eq 0 ]; then
   extra_relaunch_flag=()
   if [ "$is_secondmate_relaunch" -eq 1 ]; then
     extra_relaunch_flag=("--secondmate-relaunch")
+  elif [ "$RELAUNCH" -eq 1 ]; then
+    extra_relaunch_flag=("--recovery-relaunch")
   fi
   node "$FM_ROOT/bin/fm-router-v2.mjs" ingress-dispatched \
     --task-id "$ID" \

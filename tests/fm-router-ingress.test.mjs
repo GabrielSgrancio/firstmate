@@ -536,12 +536,48 @@ esac
     execFileSync('git', ['worktree', 'add', '-q', '-b', 'wt-b', wtB, 'HEAD'], { cwd: repoDir });
     fs.writeFileSync(currentWtFile, wtB);
 
+    const spawnRefused = (args) => {
+      try {
+        execFileSync('bash', [SPAWN_SH, ...args], { encoding: 'utf8', env: realEnv, stdio: 'pipe' });
+      } catch (error) {
+        return String(error.stderr);
+      }
+      assert.fail(`spawn unexpectedly succeeded: ${args.join(' ')}`);
+    };
+
+    // A home carrying Router V3 inputs is enforced by default: a legacy spawn is
+    // refused before any endpoint exists, and so is a hand-passed router execution
+    // id with no recorded router selection behind it.
+    assert.match(
+      spawnRefused([taskIdB, repoDir, '--scout', 'bash -c "sleep 1"', '--backend', 'tmux']),
+      /router dispatch authority is enforced/
+    );
+    assert.match(
+      spawnRefused([taskIdB, repoDir, '--scout', 'bash -c "sleep 1"', '--backend', 'tmux',
+        '--route-id', 'codex:gpt-5.6-terra:medium', '--route-execution-id', 'rex-forged-1']),
+      /router selection could not be verified: .*no router selection is recorded/
+    );
+    assert.match(
+      spawnRefused([taskIdB, repoDir, '--scout', 'bash -c "sleep 1"', '--backend', 'tmux', '--manual-override', 'captain picked it']),
+      /needs --data-class/
+    );
+    assert.match(
+      spawnRefused([taskIdB, repoDir, '--scout', '--harness', 'codex', '--backend', 'tmux',
+        '--manual-override', 'captain picked it', '--data-class', 'SECRET']),
+      /manual override refused by data policy/
+    );
+    assert.ok(!fs.existsSync(path.join(realHome, 'state', `${taskIdB}.meta`)), 'refused spawns create no task record');
+
+    // Advisory authority keeps the legacy path.
+    const authorityFile = path.join(realHome, 'config', 'router-authority');
+    fs.writeFileSync(authorityFile, 'advisory\n');
     const spawnOutB = execFileSync(
       'bash',
       [SPAWN_SH, taskIdB, repoDir, '--scout', 'bash -c "sleep 1"', '--backend', 'tmux'],
       { encoding: 'utf8', env: realEnv }
     );
     assert.match(spawnOutB, new RegExp(`spawned ${taskIdB}`));
+    fs.rmSync(authorityFile);
 
     const metaB = fs.readFileSync(path.join(realHome, 'state', `${taskIdB}.meta`), 'utf8');
     assert.match(metaB, /route_execution_id=rex-/);
@@ -555,6 +591,27 @@ esac
       { cwd: tempDir, encoding: 'utf8', env: realEnv }
     );
     assert.match(teardownOutB, new RegExp(`teardown ${taskIdB} complete`));
+
+    // 5a': Explicit manual override under enforced authority.
+    const taskIdO = 'real-override-e2e';
+    fs.mkdirSync(path.join(realHome, 'data', taskIdO), { recursive: true });
+    fs.writeFileSync(
+      path.join(realHome, 'data', taskIdO, 'brief.md'),
+      '# Task\n\n## Captain\'s intent\nManual override dispatch.\n\n## Firstmate spec\nVerify override audit.\n'
+    );
+    const wtO = path.join(tempDir, 'wt-o');
+    execFileSync('git', ['worktree', 'add', '-q', '-b', 'wt-o', wtO, 'HEAD'], { cwd: repoDir });
+    fs.writeFileSync(currentWtFile, wtO);
+    const spawnOutO = execFileSync(
+      'bash',
+      [SPAWN_SH, taskIdO, repoDir, '--scout', 'bash -c "sleep 1"', '--backend', 'tmux',
+        '--manual-override', 'captain chose this worker explicitly', '--data-class', 'PUBLIC'],
+      { encoding: 'utf8', env: realEnv, stdio: 'pipe' }
+    );
+    assert.match(spawnOutO, new RegExp(`spawned ${taskIdO}`));
+    fs.writeFileSync(path.join(realHome, 'data', taskIdO, 'report.md'), '# Scout Report\n\nCompleted.\n');
+    execFileSync('bash', [HOLD_SH, 'complete', taskIdO, '--none'], { env: realEnv });
+    execFileSync('bash', [TEARDOWN_SH, taskIdO], { cwd: tempDir, encoding: 'utf8', env: realEnv });
 
     // 5b: Real Path A dispatch via dispatchThroughHerdr
     const taskIdA = 'real-path-a-e2e';
@@ -617,6 +674,14 @@ esac
     assert.equal(dispB.dispatch_status, 'dispatched');
     assert.equal(runB.dispatch_status, 'running');
     assert.equal(compB.dispatch_status, 'completed');
+
+    const overrideStart = realRecords.find(r => r.task_id === taskIdO && r.dispatch_status === 'started');
+    assert.equal(overrideStart.dispatch_path, 'B');
+    assert.equal(overrideStart.route_decision.decision_type, 'manual_override');
+    assert.equal(overrideStart.route_decision.override_reason, 'captain chose this worker explicitly');
+    assert.equal(overrideStart.route_decision.router_authority, 'enforced');
+    assert.equal(overrideStart.data_class, 'PUBLIC');
+    assert.equal(realRecords.find(r => r.task_id === taskIdB && r.dispatch_status === 'started').route_decision.router_authority, 'advisory');
 
     const pathARecs = realRecords.filter(r => r.task_id === taskIdA);
     assert.equal(pathARecs.length, 5, 'Path A must have selected, launched, dispatched, run, completed');
