@@ -1,0 +1,777 @@
+{
+  "DeepSeek-V4.1-Flash": {
+    "model_version": "deepseek-v4-flash",
+    "capabilities": {
+      "targeted_edit": {
+        "class": "STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://api-docs.deepseek.com/",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:00:00-03:00",
+            "model_version": "deepseek-v4-flash",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Alias-backed V4.1 Flash profile; provider claims are evidence, not literal production success.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "mechanical_tool_work": {
+        "class": "STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://api-docs.deepseek.com/",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:00:00-03:00",
+            "model_version": "deepseek-v4-flash",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Alias-backed V4.1 Flash profile; provider claims are evidence, not literal production success.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "test_generation": {
+        "class": "VERY_STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://api-docs.deepseek.com/",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:00:00-03:00",
+            "model_version": "deepseek-v4-flash",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Alias-backed V4.1 Flash profile; provider claims are evidence, not literal production success.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "refactor": {
+        "class": "VERY_STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://api-docs.deepseek.com/",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:00:00-03:00",
+            "model_version": "deepseek-v4-flash",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Alias-backed V4.1 Flash profile; provider claims are evidence, not literal production success.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "general_engineering": {
+        "class": "VERY_STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://api-docs.deepseek.com/",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:00:00-03:00",
+            "model_version": "deepseek-v4-flash",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Alias-backed V4.1 Flash profile; provider claims are evidence, not literal production success.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "multi_file_feature": {
+        "class": "STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://api-docs.deepseek.com/",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:00:00-03:00",
+            "model_version": "deepseek-v4-flash",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Alias-backed V4.1 Flash profile; provider claims are evidence, not literal production success.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "brownfield_debugging": {
+        "class": "STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://api-docs.deepseek.com/",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:00:00-03:00",
+            "model_version": "deepseek-v4-flash",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Alias-backed V4.1 Flash profile; provider claims are evidence, not literal production success.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "concurrency_debugging": {
+        "class": "STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://api-docs.deepseek.com/",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:00:00-03:00",
+            "model_version": "deepseek-v4-flash",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Alias-backed V4.1 Flash profile; provider claims are evidence, not literal production success.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "backend": {
+        "class": "STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://api-docs.deepseek.com/",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:00:00-03:00",
+            "model_version": "deepseek-v4-flash",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Alias-backed V4.1 Flash profile; provider claims are evidence, not literal production success.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "frontend": {
+        "class": "STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://api-docs.deepseek.com/",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:00:00-03:00",
+            "model_version": "deepseek-v4-flash",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Alias-backed V4.1 Flash profile; provider claims are evidence, not literal production success.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "infra": {
+        "class": "STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://api-docs.deepseek.com/",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:00:00-03:00",
+            "model_version": "deepseek-v4-flash",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Alias-backed V4.1 Flash profile; provider claims are evidence, not literal production success.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "systems": {
+        "class": "STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://api-docs.deepseek.com/",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:00:00-03:00",
+            "model_version": "deepseek-v4-flash",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Alias-backed V4.1 Flash profile; provider claims are evidence, not literal production success.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "security": {
+        "class": "STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://api-docs.deepseek.com/",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:00:00-03:00",
+            "model_version": "deepseek-v4-flash",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Alias-backed V4.1 Flash profile; provider claims are evidence, not literal production success.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "autonomous_engineering": {
+        "class": "VERY_STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://api-docs.deepseek.com/",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:00:00-03:00",
+            "model_version": "deepseek-v4-flash",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Alias-backed V4.1 Flash profile; provider claims are evidence, not literal production success.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "long_horizon": {
+        "class": "STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://api-docs.deepseek.com/",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:00:00-03:00",
+            "model_version": "deepseek-v4-flash",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Alias-backed V4.1 Flash profile; provider claims are evidence, not literal production success.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "architecture": {
+        "class": "STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://api-docs.deepseek.com/",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:00:00-03:00",
+            "model_version": "deepseek-v4-flash",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Alias-backed V4.1 Flash profile; provider claims are evidence, not literal production success.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "critical_review": {
+        "class": "STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://api-docs.deepseek.com/",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:00:00-03:00",
+            "model_version": "deepseek-v4-flash",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Alias-backed V4.1 Flash profile; provider claims are evidence, not literal production success.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "tool_use": {
+        "class": "VERY_STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://api-docs.deepseek.com/",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:00:00-03:00",
+            "model_version": "deepseek-v4-flash",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Alias-backed V4.1 Flash profile; provider claims are evidence, not literal production success.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "repo_retrieval": {
+        "class": "STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://api-docs.deepseek.com/",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:00:00-03:00",
+            "model_version": "deepseek-v4-flash",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Alias-backed V4.1 Flash profile; provider claims are evidence, not literal production success.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "long_context": {
+        "class": "STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://api-docs.deepseek.com/",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:00:00-03:00",
+            "model_version": "deepseek-v4-flash",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Alias-backed V4.1 Flash profile; provider claims are evidence, not literal production success.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "multimodal": {
+        "class": "STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://api-docs.deepseek.com/",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:00:00-03:00",
+            "model_version": "deepseek-v4-flash",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Alias-backed V4.1 Flash profile; provider claims are evidence, not literal production success.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      }
+    },
+    "aliases": [
+      "deepseek-v4.1-flash",
+      "deepseek-flash",
+      "deepseek-v4-flash",
+      "deepseek-v4-flash-vision-exp"
+    ]
+  },
+  "DeepSeek-V4-Pro-0813": {
+    "model_version": "deepseek-v4-pro",
+    "capabilities": {
+      "targeted_edit": {
+        "class": "STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://api-docs.deepseek.com/",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:00:00-03:00",
+            "model_version": "deepseek-v4-pro",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Alias-backed V4.1 Flash profile; provider claims are evidence, not literal production success.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "mechanical_tool_work": {
+        "class": "STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://api-docs.deepseek.com/",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:00:00-03:00",
+            "model_version": "deepseek-v4-pro",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Alias-backed V4.1 Flash profile; provider claims are evidence, not literal production success.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "test_generation": {
+        "class": "VERY_STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://api-docs.deepseek.com/",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:00:00-03:00",
+            "model_version": "deepseek-v4-pro",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Alias-backed V4.1 Flash profile; provider claims are evidence, not literal production success.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "refactor": {
+        "class": "VERY_STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://api-docs.deepseek.com/",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:00:00-03:00",
+            "model_version": "deepseek-v4-pro",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Alias-backed V4.1 Flash profile; provider claims are evidence, not literal production success.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "general_engineering": {
+        "class": "VERY_STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://api-docs.deepseek.com/",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:00:00-03:00",
+            "model_version": "deepseek-v4-pro",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Alias-backed V4.1 Flash profile; provider claims are evidence, not literal production success.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "multi_file_feature": {
+        "class": "STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://api-docs.deepseek.com/",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:00:00-03:00",
+            "model_version": "deepseek-v4-pro",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Alias-backed V4.1 Flash profile; provider claims are evidence, not literal production success.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "brownfield_debugging": {
+        "class": "STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://api-docs.deepseek.com/",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:00:00-03:00",
+            "model_version": "deepseek-v4-pro",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Alias-backed V4.1 Flash profile; provider claims are evidence, not literal production success.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "concurrency_debugging": {
+        "class": "STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://api-docs.deepseek.com/",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:00:00-03:00",
+            "model_version": "deepseek-v4-pro",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Alias-backed V4.1 Flash profile; provider claims are evidence, not literal production success.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "backend": {
+        "class": "STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://api-docs.deepseek.com/",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:00:00-03:00",
+            "model_version": "deepseek-v4-pro",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Alias-backed V4.1 Flash profile; provider claims are evidence, not literal production success.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "frontend": {
+        "class": "STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://api-docs.deepseek.com/",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:00:00-03:00",
+            "model_version": "deepseek-v4-pro",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Alias-backed V4.1 Flash profile; provider claims are evidence, not literal production success.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "infra": {
+        "class": "STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://api-docs.deepseek.com/",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:00:00-03:00",
+            "model_version": "deepseek-v4-pro",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Alias-backed V4.1 Flash profile; provider claims are evidence, not literal production success.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "systems": {
+        "class": "STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://api-docs.deepseek.com/",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:00:00-03:00",
+            "model_version": "deepseek-v4-pro",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Alias-backed V4.1 Flash profile; provider claims are evidence, not literal production success.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "security": {
+        "class": "STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://api-docs.deepseek.com/",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:00:00-03:00",
+            "model_version": "deepseek-v4-pro",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Alias-backed V4.1 Flash profile; provider claims are evidence, not literal production success.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "autonomous_engineering": {
+        "class": "VERY_STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://api-docs.deepseek.com/",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:00:00-03:00",
+            "model_version": "deepseek-v4-pro",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Alias-backed V4.1 Flash profile; provider claims are evidence, not literal production success.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "long_horizon": {
+        "class": "STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://api-docs.deepseek.com/",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:00:00-03:00",
+            "model_version": "deepseek-v4-pro",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Alias-backed V4.1 Flash profile; provider claims are evidence, not literal production success.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "architecture": {
+        "class": "STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://api-docs.deepseek.com/",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:00:00-03:00",
+            "model_version": "deepseek-v4-pro",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Alias-backed V4.1 Flash profile; provider claims are evidence, not literal production success.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "critical_review": {
+        "class": "STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://api-docs.deepseek.com/",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:00:00-03:00",
+            "model_version": "deepseek-v4-pro",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Alias-backed V4.1 Flash profile; provider claims are evidence, not literal production success.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "tool_use": {
+        "class": "VERY_STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://api-docs.deepseek.com/",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:00:00-03:00",
+            "model_version": "deepseek-v4-pro",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Alias-backed V4.1 Flash profile; provider claims are evidence, not literal production success.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "repo_retrieval": {
+        "class": "STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://api-docs.deepseek.com/",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:00:00-03:00",
+            "model_version": "deepseek-v4-pro",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Alias-backed V4.1 Flash profile; provider claims are evidence, not literal production success.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "long_context": {
+        "class": "STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://api-docs.deepseek.com/",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:00:00-03:00",
+            "model_version": "deepseek-v4-pro",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Alias-backed V4.1 Flash profile; provider claims are evidence, not literal production success.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      },
+      "multimodal": {
+        "class": "STRONG",
+        "confidence": "MEDIUM",
+        "provenance": [
+          {
+            "source": "https://api-docs.deepseek.com/",
+            "source_type": "first_party_docs",
+            "retrieved_at": "2026-09-15T12:00:00-03:00",
+            "model_version": "deepseek-v4-pro",
+            "benchmark": null,
+            "benchmark_harness": null,
+            "confidence": "MEDIUM",
+            "notes": "Alias-backed V4.1 Flash profile; provider claims are evidence, not literal production success.",
+            "effective_from": "2026-09-15",
+            "valid_until": null
+          }
+        ]
+      }
+    },
+    "aliases": [
+      "deepseek-v4-pro"
+    ]
+  }
+}

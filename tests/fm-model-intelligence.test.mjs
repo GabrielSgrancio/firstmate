@@ -179,6 +179,20 @@ assert.equal(derived.priors['synthetic-frontier-coder'].prior_mean, intel.CLASS_
 assert.ok(derived.priors['synthetic-frontier-coder'].recommended_roles.includes('general_engineer'));
 assert.equal(derived.priors['synthetic-weak-coder'].recommended_roles.length, 0);
 
+// --- DeepSeek Alias Resolution Regression ---
+const deepseekRoute = synthetic('deepseek-v4.1-flash', { resolved_backing_model: null, resolved_runtime_model: 'deepseek-v4.1-flash' });
+const deepseekMiModels = {
+  'DeepSeek-V4.1-Flash': {
+    aliases: ['deepseek-v4.1-flash'],
+    model_version: 'deepseek-v4-flash',
+    capabilities: { refactor: structuredClone(miDoc.models['synthetic-frontier-coder'].capabilities.refactor) }
+  }
+};
+const deepseekFit = intel.resolveTaskFit({ models: deepseekMiModels }, deepseekRoute, 'refactor', new Date(nowMs));
+assert.equal(deepseekFit.usable, true);
+assert.equal(deepseekFit.class, 'FRONTIER');
+console.log('DeepSeek alias resolution regression test passed');
+
 // --- Failure attribution and capability anomalies ---
 const learnedBeforeOutcomes = fs.readFileSync(learnedPath, 'utf8');
 const miBeforeOutcomes = fs.readFileSync(miPath, 'utf8');
