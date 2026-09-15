@@ -500,4 +500,106 @@ assert.equal(completedCapsule.previous_routes.length, 1);
 
 console.log('✓ Test 7 passed: full Route A -> failure -> Route B continuation lifecycle verified');
 
+// ============================================================================
+// 8. Production wiring: Router dispatch failure -> capsule -> continuation route
+// ============================================================================
+console.log('Test 8: dispatchThroughHerdr records a capsule on a classified failure and resumes from it');
+{
+  const router = await import('../bin/fm-router-v2.mjs');
+  const provision = (taskId) => {
+    fs.mkdirSync(path.join(home, 'data', taskId), { recursive: true });
+    fs.writeFileSync(path.join(home, 'data', taskId, 'brief.md'), `# brief for ${taskId}\n`);
+  };
+  const argValue = (args, flag) => args[args.indexOf(flag) + 1];
+  const routes = JSON.parse(fs.readFileSync(path.join(home, 'data', 'provider-catalogs', 'compiled-route-targets.json'), 'utf8'));
+  const poolOf = (routeId) => routes.find((route) => route.route_id === routeId)?.quota_pool;
+
+  // A tool follow-through failure escalates the role, which failed-route exclusion alone never does.
+  provision('wp8-dispatch-tool');
+  const toolCalls = [];
+  const toolResult = router.dispatchThroughHerdr({
+    taskId: 'wp8-dispatch-tool',
+    role: 'general_engineer',
+    dataClass: 'PUBLIC',
+    intent: 'Finish the parser refactor',
+    useLiveAxi: false,
+    refreshCatalog: false,
+    spawnRunner: (args) => {
+      toolCalls.push(args);
+      if (toolCalls.length === 1) {
+        return {
+          success: false,
+          error: 'worker stopped before running the tests',
+          failureClassification: FAILURE_CLASSIFICATIONS.TOOL_FOLLOW_THROUGH_FAILURE,
+          currentDiff: '+ export function parse(input) { return tokenize(input); }',
+          filesModified: ['src/parser.js'],
+          failedHypotheses: [{ hypothesis: 'tokenizer handles unicode', reason_refuted: 'unicode test fails' }]
+        };
+      }
+      return { success: true, output: 'no provider started' };
+    }
+  });
+  assert.equal(toolResult.success, true);
+  assert.equal(toolCalls.length, 2);
+  const failedRouteId = argValue(toolCalls[0], '--route-id');
+  assert.notEqual(argValue(toolCalls[1], '--route-id'), failedRouteId, 'the failed route is not retried');
+  assert.equal(argValue(toolCalls[0], '--role'), 'general_engineer');
+  assert.equal(argValue(toolCalls[1], '--role'), 'autonomous_engineer', 'the next route comes from the capsule failure class');
+  assert.equal(toolResult.continuation.failureClassification, FAILURE_CLASSIFICATIONS.TOOL_FOLLOW_THROUGH_FAILURE);
+  assert.equal(toolResult.continuation.escalation.taskClass, 'multi_file_feature');
+
+  const toolCapsule = loadTaskStateCapsule('wp8-dispatch-tool', { fmHome: home });
+  assert.equal(toolCapsule.objective, 'Finish the parser refactor');
+  assert.equal(toolCapsule.data_class, 'PUBLIC');
+  assert.equal(toolCapsule.attempt_count, 2);
+  assert.equal(toolCapsule.failure_classification, FAILURE_CLASSIFICATIONS.TOOL_FOLLOW_THROUGH_FAILURE);
+  assert.equal(toolCapsule.previous_routes[0].route_id, failedRouteId);
+  assert.equal(toolCapsule.current_route.route_id, argValue(toolCalls[1], '--route-id'));
+  assert.equal(toolCapsule.route_execution_id, argValue(toolCalls[1], '--route-execution-id'));
+  assert.deepEqual(toolCapsule.files_modified, ['src/parser.js']);
+  assert.ok(toolCapsule.failed_hypotheses.some((entry) => entry.hypothesis === 'tokenizer handles unicode'));
+  const prompt = fs.readFileSync(toolResult.continuation.promptPath, 'utf8');
+  assert.match(prompt, /Finish the parser refactor/);
+  assert.match(prompt, /return tokenize\(input\)/);
+  assert.match(prompt, /tokenizer handles unicode/);
+  assert.match(prompt, new RegExp(`Prior Route: ${failedRouteId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+
+  // A quota failure is recognised from the error and moves off the exhausted pool.
+  provision('wp8-dispatch-quota');
+  const quotaCalls = [];
+  const quotaResult = router.dispatchThroughHerdr({
+    taskId: 'wp8-dispatch-quota',
+    role: 'general_engineer',
+    dataClass: 'PUBLIC',
+    useLiveAxi: false,
+    refreshCatalog: false,
+    spawnRunner: (args) => {
+      quotaCalls.push(args);
+      return quotaCalls.length === 1 ? { success: false, error: 'usage limit reached for this plan' } : { success: true };
+    }
+  });
+  assert.equal(quotaResult.success, true);
+  assert.equal(quotaResult.continuation.failureClassification, FAILURE_CLASSIFICATIONS.QUOTA_FAILURE);
+  assert.notEqual(poolOf(argValue(quotaCalls[1], '--route-id')), poolOf(argValue(quotaCalls[0], '--route-id')),
+    'a quota failure resumes in a different pool');
+  assert.equal(loadTaskStateCapsule('wp8-dispatch-quota', { fmHome: home }).previous_routes[0].failure_classification, FAILURE_CLASSIFICATIONS.QUOTA_FAILURE);
+
+  // With every attempt failing, the capsule still records each failed route.
+  provision('wp8-dispatch-exhausted');
+  let exhaustedCalls = 0;
+  const exhausted = router.dispatchThroughHerdr({
+    taskId: 'wp8-dispatch-exhausted',
+    role: 'general_engineer',
+    dataClass: 'PUBLIC',
+    useLiveAxi: false,
+    refreshCatalog: false,
+    spawnRunner: () => { exhaustedCalls += 1; return { success: false, error: 'launcher crashed' }; }
+  });
+  assert.equal(exhausted.success, false);
+  const exhaustedCapsule = loadTaskStateCapsule('wp8-dispatch-exhausted', { fmHome: home });
+  assert.equal(exhaustedCapsule.previous_routes.length, exhaustedCalls);
+  assert.equal(new Set(exhaustedCapsule.previous_routes.map((entry) => entry.route_id)).size, exhaustedCalls);
+}
+console.log('✓ Test 8 passed: production dispatch failure creates, updates, and consumes the TaskStateCapsule');
+
 console.log('\nAll Router V3 WP8 Task State tests passed successfully!');

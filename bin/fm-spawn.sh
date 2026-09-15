@@ -82,6 +82,9 @@
 #   artifact. The spawn exports FM_CONTEXT_PACK and FM_CONTEXT_BROKER to every
 #   child process, so premium workers can request a verified targeted slice
 #   without re-ingesting the original bulk operation.
+#   When data/<id>/continuation.md exists (written by Router dispatch after a
+#   classified route failure, from the task's WP8 TaskStateCapsule), the launch
+#   brief carries it as the worker's continuation state.
 #   A backend spawn refusal (missing dependency, version gate, unauthenticated
 #   socket, or unsupported secondmate mode) is terminal for that selected backend;
 #   callers must surface it instead of silently retrying another backend.
@@ -2413,6 +2416,11 @@ if [ "$KIND" = ship ] || [ "$KIND" = scout ]; then
           printf '%s\n' "The Context Broker pack for this task is at \`$CONTEXT_PACK\`." &&
           printf '%s\n' "Use \`$FM_ROOT/bin/fm-context-broker.mjs\` for bulk repository reads, scans, grep output, logs, tests, and builds." &&
           printf '%s\n' 'Narrow source slices may use the broker slice command, which verifies the pack source hash before returning exact lines.'
+      fi
+      if [ -f "$DATA/$ID/continuation.md" ]; then
+        printf '\n## Continuation state\n' &&
+          printf '%s\n' 'A previous route for this task failed; resume from this recorded state instead of restarting discovery.' &&
+          cat "$DATA/$ID/continuation.md"
       fi
       if [ "$KIND" = ship ] && [ "$MODE" = no-mistakes ]; then
         fm_brief_intent_overlay "$CAPTAIN_INTENT"

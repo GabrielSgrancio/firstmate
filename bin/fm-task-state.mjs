@@ -530,6 +530,8 @@ export function selectContinuationRoute(capsule, {
   exhaustedPool = null,
   excludeRoutes = [],
   quotaOverrides = null,
+  currentRole = null,
+  critical = false,
   useLiveAxi = false,
   now = new Date()
 } = {}) {
@@ -543,6 +545,8 @@ export function selectContinuationRoute(capsule, {
     failureReason,
     contextPack,
     exhaustedPool,
+    currentRole,
+    critical,
     excludeRoutes,
     quotaOverrides
   });

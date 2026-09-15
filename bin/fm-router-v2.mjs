@@ -25,6 +25,18 @@ import {
   selectEconomicRoute
 } from './fm-routing-economics.mjs';
 import { createContextBroker } from './fm-context-broker.mjs';
+import {
+  FAILURE_CLASSIFICATIONS,
+  createTaskStateCapsule,
+  formatContinuationPrompt,
+  getTaskCapsulePath,
+  loadTaskStateCapsule,
+  recordContinuationDispatch,
+  recordRouteFailureAndHandoff,
+  saveTaskStateCapsule,
+  selectContinuationRoute,
+  updateTaskStateCapsule
+} from './fm-task-state.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const currentFmHome = () => path.resolve(process.env.FM_HOME || ROOT);
@@ -1270,6 +1282,90 @@ export function ingressDispatchFailed({
   return logTelemetry(record);
 }
 
+// A launch failure is classified from what the spawn runner reports: an explicit
+// WP8 classification wins, quota and data-policy refusals are recognised from
+// the error text, and anything else is a hard runtime failure.
+export function classifyDispatchFailure(spawnResult = {}) {
+  const explicit = spawnResult?.failureClassification;
+  if (explicit && Object.values(FAILURE_CLASSIFICATIONS).includes(explicit)) return explicit;
+  const text = String(spawnResult?.error || '');
+  if (/quota|rate[ -]?limit|usage limit|exhausted|\b429\b/i.test(text)) return FAILURE_CLASSIFICATIONS.QUOTA_FAILURE;
+  if (/data policy|privacy|not permitted|strictly excluded/i.test(text)) return FAILURE_CLASSIFICATIONS.POLICY_FAILURE;
+  return FAILURE_CLASSIFICATIONS.HARD_RUNTIME_FAILURE;
+}
+
+function continuationRouteRef(route) {
+  return {
+    route_id: route.route_id,
+    harness: route.harness,
+    model: route.resolved_runtime_model,
+    effort: route.reasoning_effort || null,
+    provider_path: route.provider_path || null,
+    quota_pool: route.quota_pool || null
+  };
+}
+
+// Work already present in the task's recorded local copy, so the next route
+// resumes from it instead of rediscovering it.
+function recordedWorktreeProgress(taskId) {
+  const metaPath = homePath(path.join('state', `${taskId}.meta`));
+  if (!fs.existsSync(metaPath)) return {};
+  const line = fs.readFileSync(metaPath, 'utf8').split('\n').find((entry) => entry.startsWith('worktree='));
+  const worktree = line ? line.slice('worktree='.length).trim() : '';
+  if (!worktree || !fs.existsSync(worktree)) return {};
+  try {
+    const git = (args) => execFileSync('git', ['-C', worktree, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 4 * 1024 * 1024 });
+    return {
+      currentDiff: git(['diff', 'HEAD']),
+      filesModified: git(['diff', '--name-only', 'HEAD']).split('\n').filter(Boolean)
+    };
+  } catch {
+    return {};
+  }
+}
+
+// WP8 handoff for a failed route: create the task's capsule on its first
+// failure, then record the failure classification, the failed route, and the
+// prior diff and refuted hypotheses the next route must resume from.
+function recordDispatchFailureCapsule({ taskId, role, taskClass, dataClass, intent, spec, briefPath, selectedRoute, execId, failureClassification, spawnResult }) {
+  const routeRef = continuationRouteRef(selectedRoute);
+  if (!fs.existsSync(getTaskCapsulePath(taskId))) {
+    const briefText = fs.readFileSync(briefPath, 'utf8').trim();
+    const objective = [intent, spec].filter(Boolean).join('\n').trim() || briefText.slice(0, 4000) || `Complete task ${taskId}`;
+    saveTaskStateCapsule(taskId, createTaskStateCapsule({
+      logical_task_id: taskId,
+      route_execution_id: execId,
+      objective,
+      constraints: [`data class ${dataClass}`, 'use only already-paid subscription capacity'],
+      task_class: taskClass || taskClassForRole(role),
+      data_class: dataClass,
+      current_route: routeRef
+    }));
+  } else {
+    updateTaskStateCapsule(taskId, (capsule) => {
+      if (capsule.current_route?.route_id !== routeRef.route_id) {
+        capsule.current_route = routeRef;
+        capsule.route_execution_id = execId;
+      }
+    });
+  }
+  const progress = recordedWorktreeProgress(taskId);
+  const reason = String(spawnResult?.error || 'spawn failed').slice(0, 500);
+  return recordRouteFailureAndHandoff(taskId, {
+    failureClassification,
+    failureReason: reason,
+    currentDiff: spawnResult?.currentDiff ?? progress.currentDiff ?? null,
+    filesModified: spawnResult?.filesModified ?? progress.filesModified ?? null,
+    commandsExecuted: spawnResult?.commandsExecuted ?? null,
+    testResults: spawnResult?.testResults ?? null,
+    failedHypotheses: [
+      ...(Array.isArray(spawnResult?.failedHypotheses) ? spawnResult.failedHypotheses : []),
+      { hypothesis: `route ${routeRef.route_id} can carry this task`, reason_refuted: `${failureClassification}: ${reason}` }
+    ],
+    nextRecommendedAction: `Resume on a different route after ${failureClassification}; do not repeat refuted hypotheses.`
+  });
+}
+
 export function dispatchThroughHerdr({
   taskId,
   role = 'general_engineer',
@@ -1295,7 +1391,8 @@ export function dispatchThroughHerdr({
   retryCount = 0,
   useLiveAxi = true,
   backend = 'herdr',
-  refreshCatalog = true
+  refreshCatalog = true,
+  continuation = null
 }) {
   if (!dataClass || dataClass === 'UNKNOWN') {
     throw new Error('dispatchThroughHerdr: dataClass is required and must not be empty or UNKNOWN (fail-closed policy)');
@@ -1311,17 +1408,40 @@ export function dispatchThroughHerdr({
     const { compiledRoutes } = loadConfigs();
     effectiveExcludes.push(...compiledRoutes.filter(r => r.harness === 'antigravity').map(r => r.route_id));
   }
-  const decision = scoreAndSelectRoute({
-    role,
-    taskClass,
-    dataClass,
-    targetEffort,
-    critical,
-    retryTolerant,
-    excludeRoutes: effectiveExcludes,
-    quotaOverrides,
-    useLiveAxi
-  });
+  // A retry after a classified failure resumes from the task's capsule: the WP8
+  // continuation scheduler picks the next route from its failure class, and the
+  // continuation prompt is delivered to that worker through the launch brief.
+  let decision;
+  let continuationState = null;
+  if (continuation) {
+    const capsule = loadTaskStateCapsule(taskId);
+    const selection = selectContinuationRoute(capsule, {
+      failureClassification: continuation.failureClassification,
+      failedRoute: continuation.failedRoute,
+      exhaustedPool: continuation.exhaustedPool,
+      excludeRoutes: effectiveExcludes,
+      quotaOverrides,
+      currentRole: role,
+      critical,
+      useLiveAxi
+    });
+    decision = selection.decision;
+    continuationState = { capsule, escalation: selection.escalation };
+    role = selection.escalation.role;
+    taskClass = selection.escalation.taskClass;
+  } else {
+    decision = scoreAndSelectRoute({
+      role,
+      taskClass,
+      dataClass,
+      targetEffort,
+      critical,
+      retryTolerant,
+      excludeRoutes: effectiveExcludes,
+      quotaOverrides,
+      useLiveAxi
+    });
+  }
   const selectedRoute = decision.selectedRoute;
   const briefPath = homePath(path.join('data', taskId, 'brief.md'));
   if (!fs.existsSync(briefPath)) {
@@ -1346,6 +1466,17 @@ export function dispatchThroughHerdr({
 
   const execId = routeExecutionId || `rex-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
   const rootExecId = parentExecutionId || execId;
+
+  if (continuationState) {
+    const promptPath = homePath(path.join('data', taskId, 'continuation.md'));
+    fs.writeFileSync(promptPath, `${formatContinuationPrompt(continuationState.capsule)}\n`, { mode: 0o600 });
+    continuationState.promptPath = promptPath;
+    recordContinuationDispatch(taskId, {
+      nextRoute: selectedRoute,
+      nextRouteExecutionId: execId,
+      contextPackRefs: contextPack.provenance?.pack_sha256 ? [contextPack.provenance.pack_sha256] : []
+    });
+  }
 
   ingressDispatchStarted({
     taskId,
@@ -1459,8 +1590,25 @@ export function dispatchThroughHerdr({
       }
     });
 
+    const failureClassification = classifyDispatchFailure(spawnResult);
+    let nextContinuation = null;
+    let capsuleError = null;
+    try {
+      recordDispatchFailureCapsule({
+        taskId, role, taskClass, dataClass, intent, spec, briefPath, selectedRoute, execId, failureClassification, spawnResult
+      });
+      nextContinuation = {
+        failureClassification,
+        failedRoute: continuationRouteRef(selectedRoute),
+        exhaustedPool: failureClassification === FAILURE_CLASSIFICATIONS.QUOTA_FAILURE ? routePoolName(selectedRoute) : null
+      };
+    } catch (error) {
+      capsuleError = error.message;
+    }
+    const failureResult = { success: false, taskId, executionId: execId, routeExecutionId: execId, routeDecision: decision, selectedRoute, spawnOutput: '', failureClassification, capsuleError };
+
     if (effectiveExcludes.includes(selectedRoute.route_id)) {
-      return { success: false, taskId, executionId: execId, routeExecutionId: execId, routeDecision: decision, selectedRoute, spawnOutput: '' };
+      return failureResult;
     }
     try {
       return dispatchThroughHerdr({
@@ -1488,10 +1636,11 @@ export function dispatchThroughHerdr({
         retryCount: retryCount + 1,
         useLiveAxi,
         backend,
-        refreshCatalog: false
+        refreshCatalog: false,
+        continuation: nextContinuation
       });
     } catch (retryError) {
-      return { success: false, taskId, executionId: execId, routeExecutionId: execId, routeDecision: decision, selectedRoute, spawnOutput: '', error: retryError.message };
+      return { ...failureResult, error: retryError.message };
     }
   }
 
@@ -1569,6 +1718,12 @@ export function dispatchThroughHerdr({
     routeDecision: decision,
     selectedRoute,
     contextPack,
+    continuation: continuationState ? {
+      capsulePath: getTaskCapsulePath(taskId),
+      promptPath: continuationState.promptPath,
+      failureClassification: continuation.failureClassification,
+      escalation: continuationState.escalation
+    } : null,
     herdr: {
       window: meta.window,
       session: meta.herdr_session,

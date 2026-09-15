@@ -721,6 +721,60 @@ esac
     assert.equal(dispA.dispatch_status, 'dispatched');
     assert.equal(runA.dispatch_status, 'running');
     assert.equal(compA.dispatch_status, 'completed');
+
+    // 5d: A classified route failure hands the WP8 capsule to the next route's
+    // real fm-spawn.sh launch brief. Only the first launch is replaced by a
+    // failing runner; the retry runs the real spawn with fake tmux, no provider.
+    const taskIdC = 'real-continuation-e2e';
+    fs.mkdirSync(path.join(realHome, 'data', taskIdC), { recursive: true });
+    fs.writeFileSync(
+      path.join(realHome, 'data', taskIdC, 'brief.md'),
+      '# Task\n\n## Captain\'s intent\nContinuation dispatch.\n\n## Firstmate spec\nResume from the capsule.\n'
+    );
+    const wtC = path.join(tempDir, 'wt-c');
+    execFileSync('git', ['worktree', 'add', '-q', '-b', 'wt-c', wtC, 'HEAD'], { cwd: repoDir });
+    fs.writeFileSync(currentWtFile, wtC);
+    const continuationSpawns = [];
+    const resultC = dispatchThroughHerdr({
+      taskId: taskIdC,
+      role: 'general_engineer',
+      dataClass: 'PUBLIC',
+      intent: 'Resume the continuation fixture',
+      projectDir: repoDir,
+      useLiveAxi: false,
+      backend: 'tmux',
+      spawnRunner: (args, { env }) => {
+        continuationSpawns.push(args);
+        if (continuationSpawns.length === 1) {
+          return {
+            success: false,
+            error: 'worker exited before finishing the edit',
+            failureClassification: 'TOOL_FOLLOW_THROUGH_FAILURE',
+            currentDiff: '+ CONTINUATION_DIFF_MARKER',
+            failedHypotheses: ['CONTINUATION_HYPOTHESIS_MARKER']
+          };
+        }
+        try {
+          return { success: true, output: execFileSync('bash', args, { encoding: 'utf8', env, stdio: 'pipe' }) };
+        } catch (error) {
+          return { success: false, error: String(error.stderr || error.message) };
+        }
+      }
+    });
+    assert.equal(resultC.success, true, JSON.stringify(resultC.error || ''));
+    assert.equal(continuationSpawns.length, 2);
+    assert.equal(continuationSpawns[1][continuationSpawns[1].indexOf('--role') + 1], 'autonomous_engineer');
+    const launchBriefC = fs.readFileSync(path.join(realHome, 'data', taskIdC, 'launch-brief.md'), 'utf8');
+    assert.match(launchBriefC, /## Continuation state/);
+    assert.match(launchBriefC, /Resume the continuation fixture/);
+    assert.match(launchBriefC, /CONTINUATION_DIFF_MARKER/);
+    assert.match(launchBriefC, /CONTINUATION_HYPOTHESIS_MARKER/);
+    assert.match(launchBriefC, /TOOL_FOLLOW_THROUGH_FAILURE/);
+    const metaC = fs.readFileSync(path.join(realHome, 'state', `${taskIdC}.meta`), 'utf8');
+    assert.match(metaC, new RegExp(`route_execution_id=${resultC.routeExecutionId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+    fs.writeFileSync(path.join(realHome, 'data', taskIdC, 'report.md'), '# Scout Report\n\nCompleted.\n');
+    execFileSync('bash', [HOLD_SH, 'complete', taskIdC, '--none'], { env: realEnv });
+    execFileSync('bash', [TEARDOWN_SH, taskIdC], { cwd: tempDir, encoding: 'utf8', env: realEnv });
   } finally {
     process.env.PATH = prevPath;
     if (prevFmHome !== undefined) process.env.FM_HOME = prevFmHome;
