@@ -51,6 +51,19 @@ OpenCode Go discovery uses a child process environment for the bearer key and ne
 
 Dispatch requires intake-provisioned task and brief state, invokes the existing `bin/fm-spawn.sh` lifecycle owner with `--backend herdr`, and appends routing receipts without taking ownership of backlog, lease, worktree, or continuity state.
 
+## Dispatch authority
+
+`node bin/fm-router-v2.mjs dispatch --task-id <id> --project <dir> --data-class <class> --role <role> (--scout | --mode <mode> --yolo <on|off>)` is the normal crewmate and scout dispatch entrypoint; its usage line lists the optional task-class, effort, retry-tolerance, critical, and backend flags.
+[`docs/configuration.md`](configuration.md) "Router dispatch authority" owns when `fm-spawn.sh` enforces it and how the audited manual override behaves.
+Before selecting, dispatch regenerates a missing or stale compiled catalog once through `bin/fm-provider-discovery.mjs refresh` and refuses if the catalog is still not fresh; `node bin/fm-router-v2.mjs catalog-refresh-if-stale` runs the same check by hand.
+A provider refresh that falls back to a snapshot older than 24 hours publishes that provider's routes as `stale_catalog`, so Stage A refuses them instead of reading the fresh file time as fresh evidence.
+`verifyRouterProvenance` and `evaluateManualOverrideDataGate` are the checks `fm-spawn.sh` calls through the `verify-provenance` and `override-gate` subcommands.
+
+A task without qualifying real capability evidence normally needs retry-tolerant exploration.
+`seedPriorAdmission` also admits a non-critical task onto a catalog `ROUTING_ELIGIBLE` route whose `config/routing-priors.json` entry names the same harness and lists the requested role in `recommended_roles`.
+Stage B still applies the task-class quality floor to that prior, Stage C records `candidate_basis: seed_prior`, and a task marked critical still requires real evidence.
+`tests/fm-router-v3-single-authority.test.mjs` pins these guarantees, and `tests/fm-router-ingress.test.mjs` exercises enforcement through real `fm-spawn.sh` launches.
+
 The deterministic Router suites use the clearly synthetic fixtures under `tests/fixtures/router-v2` and do not access live credentials or private catalogs.
 
 ## Data classification

@@ -430,6 +430,18 @@ Malformed JSON, an empty or malformed rule/default array, an unverified harness,
 While the file remains present, no crewmate or scout spawn may proceed without an explicit resolved harness; malformed configuration must be reported and corrected rather than selected around.
 Secondmate homes inherit this file from the primary, so a secondmate's own crewmates apply the same dispatch profile behavior.
 
+## Router dispatch authority (config/router-authority)
+
+`config/router-authority` is an optional local, gitignored file holding `enforced` or `advisory`.
+Absent, a home that carries `config/model-registry.json` (a Router V3 home) is `enforced`, and any other home is `advisory`.
+`advisory` keeps legacy crewmate and scout spawns and records them as `legacy_manual` dispatches.
+`enforced` makes Router V3 the normal dispatch path: `fm-spawn.sh` refuses a fresh crewmate or scout spawn unless it carries a router selection already recorded in `data/routing-executions.jsonl` for the same task, execution, route, and harness, or an explicit `--manual-override "<reason>"` with `--data-class`.
+A manual override is recorded as `decision_type=manual_override` with its reason, and the chosen harness and model must still pass the data policy.
+Relaunches of existing tasks and secondmate spawns are not new task dispatches; they are recorded as `recovery_relaunch` or `system_internal_relaunch`.
+Any other value refuses every spawn until corrected.
+While enforced, `config/crew-dispatch.json` rules apply only to a manual override's harness choice.
+[`docs/router-v2.md`](router-v2.md) "Dispatch authority" owns the router side of this contract.
+
 ## Toolchain
 
 On session start the first mate detects what its required toolchain is missing or too old and lists each problem with either an exact install command or manual instructions.
