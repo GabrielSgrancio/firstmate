@@ -88,6 +88,7 @@ When a credential's local classification is the only thing standing between a ca
 `bin/fm-vendor-auth-probe.sh` is the only approved vendor-credential probe; its `--help` owns the registered probes and mechanics.
 It takes no harness, model, or provider and returns a fact, not a route: only `authenticated` and `unauthenticated` are ground truth, while `indeterminate`, `timeout`, and `unavailable` establish nothing and must never be read as either outcome.
 Never launch a vendor CLI yourself, and never probe a credential store the candidate does not use.
+When Antigravity appears as a candidate in a matched dispatch-profile array and `quota-axi`'s reading shows it `unavailable`/`auth_required`, run a single cheap `agy models` warm-touch (read-only, non-destructive, ~1s) and re-check `quota-axi` once before concluding Antigravity is genuinely ineligible for that dispatch decision, rather than accepting a stale idle reading at face value.
 Grok prepaid `credits` are unrelated to paid-window headroom; never read them as exhaustion.
 
 Malformed configuration is an actionable error, not a candidate to rank around.
