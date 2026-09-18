@@ -98,3 +98,182 @@ FM_HOME=<fixture-home> node bin/fm-provider-discovery.mjs refresh   # 89 subscri
 FM_HOME=<fixture-home> node bin/fm-provider-discovery.mjs probe-free   # optional live availability probes
 FM_HOME=<fixture-home> node bin/fm-router-v2.mjs route fast_precise PUBLIC low
 ```
+
+---
+
+# Correction addendum (2026-09-19, commit 5ca33311 on this branch)
+
+**Method note:** everything below is re-derived from the current code in this branch; every
+behavior item below is backed by a regression test in `tests/` or live evidence in
+`evidence/router/` produced during this pass. Nothing in the addendum reuses a prior report's
+wording without re-verification.
+
+## 1. OpenCode Go capacity is now dollar/token denominated (correction item 1)
+
+The "estimated requests" table is no longer quota data. Capacity accounting now reads
+`OPENCODE_GO_MODEL_PRICING` (`bin/fm-provider-discovery.mjs:498`), the per-model USD token
+prices plus monthly USD allowances from https://opencode.ai/docs/go/ (retrieved **2026-09-19**;
+the doc states: "Usage limits are defined as monthly dollar amounts. Each model has the
+following usage limits: 5-hour — 20% of the monthly limit; weekly — 50%; and monthly — 100%").
+For each model the Router now carries: input/output/cached-read/cached-write price per 1M
+tokens, the model's monthly USD allowance, and rolling-5h (20%) / weekly (50%) USD windows.
+Pre-dispatch burn is estimated from the docs' typical-request token composition in USD
+(verified: MiMo's composition yields ~$0.0004/typical request ≈ the published only-as-an-estimate
+150,400 requests/month); post-dispatch actual usage is folded in when the runtime supplies
+token splits. The aggregate `/zen/go/v1/usage` percent table stays the conservative pool-level
+fallback (`bin/fm-opencode-quota.mjs`) and routes with dollar windows report
+`basis: published_dollar_windows` (`bin/fm-routing-economics.mjs` `routeAllowanceWindows`).
+Peak/off-peak DeepSeek windows are timed off the published 01:00-04:00 & 06:00-10:00 UTC
+Mon-Fri windows. No request-count counter appears anywhere in the allowance path anymore.
+
+Verified: `tests/fm-router-v3-full-pool.test.mjs` (dollar windows 5h=$12/$30/$60 for MiMo,
+promo expiry flips 4x monthly USD, near-exhausted dollar window gates an ABUNDANT pool) and
+`tests/fm-dynamic-discovery-acceptance.test.mjs` (dollar-derived burn replaces the 12.5/
+33.8 request-share numbers; qwen3.7-max = (420×2.50 + 66000×0.50 + 200×7.50)/1e6 = $0.03555
+per request over a $6 5h window = 0.5925 normalized burn).
+
+## 2. Free providers are actually spawnable (correction item 2)
+
+Research first: OpenCode's existing custom-provider mechanism
+(https://opencode.ai/docs/providers/, "Custom provider"; `npm: "@ai-sdk/openai-compatible"`,
+`options.baseURL` + `options.apiKey`, and `{env:VAR}` apiKey interpolation, all live-documented)
+hosts any OpenAI-compatible endpoint. So every previously completion-only free provider is now
+an OpenCode agent-session route: `bin/fm-provider-discovery.mjs` compiles them with
+`harness: 'opencode'`, `route_kind: 'agent_session'`, `provider_path: 'opencode_custom_provider'`,
+and `resolved_runtime_model: '<provider>/<model>'`; `bin/fm-provider-discovery.mjs refresh` also
+writes `data/provider-catalogs/opencode-custom-providers.json` (no secret values anywhere in it —
+apiKey fields are `{env:<VAR>}` references; the spawn launcher sources
+`~/.config/firstmate/free-provider-keys.env` locally). `bin/fm-spawn.sh`'s opencode launch now
+builds `OPENCODE_CONFIG_CONTENT` via `bin/fm-opencode-provider-config.mjs`, which fails closed
+(exit 2) when the requested model is no longer in the discovered provider catalog.
+
+Verified live end-to-end through the REAL dispatch path
+(`fm-router-v2.mjs dispatchThroughHerdr` → real `fm-spawn` → real opencode worker in an isolated
+worktree; no spawn simulation), with the OpenCode session DB recording providerID + token usage:
+
+| Route | fm-spawn proof | Session evidence |
+|---|---|---|
+| Groq | `groq/openai/gpt-oss-120b` worker completed | ses in opencode.db, providerID `groq`, 3074 input / 114 output tokens, attestation MATCH |
+| Kilo free | `kilo/deepseek/deepseek-v4-flash-0731:free` | 4415 input tokens, MATCH |
+| OpenRouter free | same model route | 4469 input tokens, MATCH |
+| Mistral `codestral-2508` | | 26793 input / 3584 cache-read, MATCH |
+| Cloudflare Workers AI | `@cf/deepseek-ai/deepseek-r1-distill-qwen-32b` | 3054 input / 418 output, MATCH |
+
+All five are live user-work requests on free routes; no PAYG route was enabled anywhere and
+`requireSpawnable` still refuses any `route_kind: 'api_completion'` remainder (no such route is
+left in the compiled pool). A tool-calling capability gate was added: probe-free now sends a
+one-request tools probe per provider (`probeFreeProviders`), Stage A refuses a route whose
+provider model rejected tools (`supports_tools === false`) — that is exactly what killed the
+first Groq attempt (`groq/compound` "tool calling is not supported"), found live during this
+proof pass. Requires the home's `config/data-policy.json` to carry the documented free-pool
+profiles (`docs/examples/free-provider-data-policy.json` merge) — noted as an operational step
+for firstmate, since the local data policy is firstmate-owned.
+
+## 3. Union Alpha Free: not satisfiable — the offer is gone
+
+Queried the LIVE catalogs on 2026-09-19: `GET /zen/go/v1/models` returns **37** models and `GET
+/zen/v1/models` **70**, and no id containing `union` in either. Compiled routes contain 0 union
+routes (fixture home refresh, 309 targets). The automatic-withdrawal property that item 3
+demanded is in place structurally: compiled targets are regenerated from the live catalog each
+refresh, so a withdrawn offer leaves the pool with no code change — regression-tested
+(`tests/fm-router-v3-full-pool.test.mjs` "Catalog drift"). Reported per the brief's fallback
+clause rather than registering a stale id.
+
+## 4. Requested → actual model attestation is enforced at runtime
+
+New `bin/fm-model-attestation.mjs` reads the ACTUAL model from the OpenCode client's own session
+storage (`~/.local/share/opencode/opencode.db` `session` rows carry the served
+providerID/modelID per worktree directory), and `recordTaskCompletion`
+(`bin/fm-router-v2.mjs`) consumes it:
+
+- explicit route + actual ≠ requested → completion is FORCED to `FAILED` with attribution
+  `MODEL_SUBSTITUTION` (not in `ROUTE_EXCUSED_ATTRIBUTIONS`, so it is a real reliability-data
+  failure for that route), and the success is never recorded against the requested model;
+- auto routes (`kilo-auto/free`) → `AUTO_ROUTE_RESOLVED` attestation plus an
+  `attribution_route_id` re-key so quality/outcome evidence lands on the model that actually ran
+  (`collectRoutingObservations` re-keys the observation through `autoRouteAttribution`);
+- runtime without an observable model record → `NO_RUNTIME_RECORD`/`UNATTESTED`, uncertainty
+  recorded, never invented.
+
+Live: on the real e2e above, every completion record carries `model_attestation: MATCH` with the
+attested actual model. The mismatch gate is tested against a fixture session DB
+(`tests/fm-router-v3-attestation.test.mjs`), and a live MATCH was recorded end-to-end through
+`fm-router-v2.mjs complete`.
+
+AGY re-test (decision item untouched): `agy --model gemini-3.7-flash-low -p "Reply PONG"` →
+PONG (gemini selector accepted and answered; observable-substitution not reproduced in one
+shot) and `agy --model claude-sonnet-4-6 -p` hung past 90 s under `-p`. The CLI records no
+actual-model surface we can attest, so the `agy-effort-silent-substitution` behavior retest is
+bounded to that observation and the backlog decision stays with the captain.
+
+## 5. Provider status is route-specific, re-probed fresh (2026-09-19)
+
+`evidence/router/full-pool-probes.json` was regenerated this pass with the tool-calling probe
+added (`probe-free`, both availability and `supports_tools` per model). Corrections that the
+fresh evidence requires, replacing any provider-global reading:
+
+- **Google AI Studio: AUTH_FAILED route-level** — fresh probes got HTTP 401 for every model
+  (`auth_failed`); Google has NO fresh successful completion in this mission's evidence. Not
+  "working".
+- **NVIDIA NIM: per-model MODEL_UNAVAILABLE** — fresh direct probes returned 404s on the probed
+  models (route-level EOL/deprecation, matching the earlier per-model finding); no fresh
+  successful completion either; catalog/auth still work (200 earlier). Not "provider working".
+- Kilo: explicit free models answered with per-model 429 upstream (`rate_limited`) on some ids
+  and 200 on others; `kilo-auto/free` (upstream id before this pass) previously attested actual
+  model `inclusionai/ling-3.0-flash-vl:free` — attribution rule holds. Kilo auto/free remains
+  the only route whose actual model differs by design.
+- Groq: live per-model split confirmed again — `openai/gpt-oss-120b` and `openai/gpt-oss-20b`
+  support tools (200 + tool probe 200), `groq/compound*` and `allam-2-7b` reject tool calling
+  (400) and are filtered out of agent dispatch.
+- Cloudflare: fresh chat/completions 200 with tool support on `@cf/openai/gpt-oss-120b`.
+- The characterization of the data report lives in firstmate's own `data/` copy of
+  `data/task-report-free-capacity/report.md`; this addendum records the corrected
+  route-specific statuses, and firstmate should mirror them there (that file is outside this
+  worker's writable scope).
+
+## 6. Replay rerun + real e2e (correction item 6)
+
+`evidence/router/full_pool_replay.mjs` is now a committed, deterministic runner (30 real tasks
+from the b5/b7 task set, same snapshot overrides, `requireSpawnable=false`), so before/after is
+reproducible instead of living in a one-off script. Its inputs:
+`evidence/router/replay-task-set.json`; outputs this pass:
+`evidence/router/c9_before_full_pool_replay.json` (commit `3562dfa1` code in a scratch worktree
+at `/tmp/opencode/before-wt`) and `c9_after_full_pool_replay.json` (this branch), same runner,
+same FM_HOME, same quota snapshots:
+
+| Snapshot | prior pass (b8) | before (same runner, 3562dfa1) | after (this pass) |
+|---|---|---|---|
+| 1 current real | 27/30, burn 13.12, opencode 21 | 27/30, burn 13.118, opencode 21/agy-3p 6 | 27/30, burn 14.905, opencode 20, agy-3p 7 |
+| 2 claude+codex dead | 27/30, burn 13.12 | 27/30, burn 14.89, opencode 20 | 27/30, burn 16.678, opencode 19, agy-3p 8 |
+| 3 balanced | 27/30, burn 12.24 | 27/30, burn 17.132, codex 11 / opencode 14 | 27/30, burn 18.905, codex 11 / opencode 13 |
+
+Reading, no target percentage:
+
+- Routeability is unchanged at 27/30 with the same three critical/SECRET rejects; quality floors
+  held identical. The dollar-burn basis shifted one low-risk task (snapshot 1) from MiMo to the
+  agy-3p claude route — the new dollar economics honestly price MiMo's composition (its typical
+  request is ~71K cache-dominant tokens; $0.0004 is genuinely cheap, and remaining scoring
+  differences now come from headroom/effort terms, not a request-count fiction).
+- Model concentration remains high (mimo ×19-20). It is still the correct score arithmetic
+  ("quality-satisfied, lowest USD burn, huge own window"); it needs real outcomes and burn
+  learning to soften, which flows from the exploration/probe traffic now wired in.
+- Free-provider share in the deterministic pass is 0 because proven-quality routes satisfy every
+  floor here; free routes are reachable and DID carry real spawn tasks (section 2), and
+  exploration dispatch remains armed at the same bounded rate.
+- Real fm-spawn e2e: five providers dispatched, five live completions, five MATCH attestations
+  (section 2's table). No PAYG anywhere.
+- Pre-existing (not this branch's) suite failures: `tests/fm-quota-failover-auto-resume-e2e*`
+  and the three supervisor-continuity tests fail identically on commit `3562dfa1`'s base (run
+  with the corrections stashed and re-run after restore) — environment-level, out of this pass's
+  scope; everything previously green is still green plus the new suite.
+
+## Not satisfiable / left over in this pass
+
+- Union Alpha Free: gone from the live catalogs (fallback clause above).
+- Union Alpha's temporary/unmetered classification needs no code because the auto-withdrawal
+  test covers the same mechanism (catalog-driven registration only).
+- The captain-home `config/data-policy.json` free-pool profile merge is an operational step for
+  firstmate; without it the Stage-A data gate still (correctly) rejects free routes there even
+  though the pool now hosts them.
+- AGY actual-model attestation has no observable source; backlog `agy-effort-silent-substitution`
+  untouched.
