@@ -34,6 +34,7 @@ import {
   normalizeAttribution
 } from './fm-model-intelligence.mjs';
 import { createContextBroker } from './fm-context-broker.mjs';
+import { attestRequestedVsActual, readOpencodeSessionAt } from './fm-model-attestation.mjs';
 import {
   FAILURE_CLASSIFICATIONS,
   createTaskStateCapsule,
@@ -2111,6 +2112,60 @@ export function recordTaskCompletion(taskId, {
   const actualCacheEfficiency = cacheEfficiency ?? meta.cache_efficiency ?? null;
   const actualLatencyMs = latencyMs ?? meta.latency_ms ?? null;
 
+  // Requested->actual model attestation (runtime identity invariant).  For an
+  // opencode-hosted route the actual served model comes from the client's own
+  // session storage for the task's worktree.  An explicit route that actually
+  // served a different model can never record SUCCESS against the requested
+  // model: the completion is forced to FAILED with attribution
+  // MODEL_SUBSTITUTION, so the route's reliability sample counts it as a real
+  // failure.  Auto routes (by design) record the resolved model where outcome
+  // evidence must be attributed.  Any telemetry/runtime problem degrades to
+  // UNATTESTED - uncertainty is recorded, never invented.
+  const requestedModel = startedRecord?.selected_model || meta.model || null;
+  let attestation = attestRequestedVsActual({
+    requested: requestedModel,
+    actual: meta.actual_model || null,
+    autoRoute: attestationAutoRoute(startedRecord, null)
+  });
+  if (requestedModel && startedRecord?.selected_route_id) {
+    try {
+      const { compiledRoutes } = loadConfigs();
+      const route = compiledRoutes.find((candidate) => candidate.route_id === startedRecord.selected_route_id);
+      const autoRoute = attestationAutoRoute(startedRecord, route);
+      let actualModel = meta.actual_model || null;
+      if (!actualModel && (route?.harness === 'opencode')) {
+        const directory = meta.worktree || meta.directory || null;
+        const session = directory
+          ? readOpencodeSessionAt({
+            directory,
+            sinceTs: startedRecord.timestamp ? new Date(startedRecord.timestamp).getTime() - 3600000 : null
+          })
+          : null;
+        if (session) {
+          actualModel = session.actual_model;
+          attestation.tokens = session.tokens;
+        }
+      }
+      const decision = attestRequestedVsActual({ requested: requestedModel, actual: actualModel, autoRoute });
+      attestation = { ...attestation, ...decision };
+      if (autoRoute && decision.attestation === 'AUTO_ROUTE_RESOLVED' && route) {
+        // Attribution re-key: outcome evidence must land on the route of the
+        // actually resolved model, not the auto route.
+        const actualRoute = compiledRoutes.find((candidate) =>
+          candidate.resolved_runtime_model === decision.actual_model ||
+          candidate.logical_alias === decision.actual_model);
+        if (actualRoute) attestation.attribution_route_id = actualRoute.route_id;
+      }
+    } catch (attestError) {
+      attestation = attestRequestedVsActual({ requested: requestedModel, actual: meta.actual_model || null });
+      attestation.attest_error = String(attestError.message).slice(0, 120);
+    }
+  }
+  if (attestation.attestation === 'MISMATCH') {
+    terminalState = 'FAILED';
+    failureAttribution = failureAttribution || 'MODEL_SUBSTITUTION';
+  }
+
   const now = new Date().toISOString();
   const completedRecord = {
     route_execution_id: execId,
@@ -2119,8 +2174,9 @@ export function recordTaskCompletion(taskId, {
     task_id: taskId,
     dispatch_path: dispatchPath,
     actual_harness: meta.harness || null,
-    actual_model: meta.model || null,
+    actual_model: attestation.actual_model || meta.model || null,
     actual_effort: meta.effort || null,
+    model_attestation: attestation,
     herdr_worker_id: meta.window || null,
     dispatch_status: 'completed',
     lifecycle_state: terminalState === 'SUCCESS' ? 'COMPLETED' : 'FAILED',
@@ -2158,6 +2214,13 @@ export function teardownTask(taskId, { force = false } = {}) {
 // only when the executions log already holds this task's router_v2 selection for
 // the same execution, route, harness, model, data class, and effort.  Passing the
 // flags by hand is not enough, and SECRET is refused even with a matching record.
+// The telemetry attribution re-key (collectRoutingObservations) calls this to
+// relocate a computed observation to the actual-model route when an auto route
+// resolved something different.
+function attestationAutoRoute(startedRecord, route) {
+  return route ? (route.auto_route === true || route.auto_routing === true) : false;
+}
+
 function spawnEffortForRoute(effort) {
   const mapped = effort === 'ultra' ? 'max' : effort;
   return ['low', 'medium', 'high', 'xhigh', 'max'].includes(mapped) ? mapped : null;

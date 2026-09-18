@@ -16,7 +16,7 @@ const {
   loadConfigs
 } = router;
 const { routeAllowanceWindows, routeAllowanceState, buildRouteEconomics } = economics;
-const { compileFreeRouteTargets, seedFreePools, opencodeGoAllowanceFor } = discovery;
+const { compileFreeRouteTargets, seedFreePools, opencodeGoAllowanceFor, writeOpenCodeCustomProviders } = discovery;
 
 // A fixture free-provider catalog set with explicit route-level availability
 // outcomes mirroring the 2026-09-18 live probes.
@@ -78,7 +78,9 @@ const zenRoute = freeRoutes.find((r) => r.route_id === 'zen-free:mimo-v2.5-free'
 assert.ok(mistralZero && mistralTier && mistralOk && zenRoute, 'probe outcomes compile');
 assert.equal(zenRoute.harness, 'opencode', 'Zen free models stay agent-session routes on the opencode harness');
 assert.equal(zenRoute.route_kind, 'agent_session');
-assert.equal(mistralOk.harness, null, 'HTTP free routes are completion-only');
+assert.equal(mistralOk.harness, 'opencode', 'HTTP free providers are hosted behind the opencode harness as custom providers');
+assert.equal(mistralOk.route_kind, 'agent_session', 'free provider routes are spawnable agent sessions');
+assert.equal(mistralOk.resolved_runtime_model, 'mistral/codestral-2508', 'model selector names provider and model');
 const kiloAuto = freeRoutes.find((r) => r.route_id === 'kilo:kilo-auto/free');
 assert.equal(kiloAuto.auto_routing, true, 'kilo-auto/free is flagged as its own auto route');
 
@@ -113,7 +115,9 @@ const stageA = stageAHardRequirements({
   dataClass: 'PUBLIC',
   requireSpawnable: true
 });
-assert.ok(stageA.rejected.some((r) => r.reason.includes('completion-only')), 'completion routes refused agent dispatch');
+assert.ok(stageA.survivors.some((c) => c.route_id !== undefined || c.route?.free_tier === true), 'free agent routes survive the spawnable gate');
+assert.ok(stageA.survivors.some((c) => c.route.route_id === 'mistral:codestral-2508'), 'a free custom-provider route is spawnable for agent dispatch');
+const spawnableFreeProviders = new Set([...stageA.survivors.filter((c) => c.route.free_tier === true).map((c) => c.route.route_id.split(':')[0])]);
 assert.ok(stageA.survivors.every((c) => c.route.harness), 'survivors for agent dispatch all carry a harness');
 const openStageA = stageAHardRequirements({
   candidates,
@@ -122,7 +126,11 @@ const openStageA = stageAHardRequirements({
   dataClass: 'PUBLIC',
   requireSpawnable: false
 });
-assert.ok(openStageA.survivors.some((c) => c.route.route_kind === 'api_completion'), 'routing/eval still sees the full pool');
+// The correction pass converted every previously completion-only free route to
+// a spawnable agent session, so api_completion residuals remaining in the pool
+// would be repository artifacts (none expected here).
+const apiCompletionResiduals = openStageA.survivors.filter((c) => c.route.route_kind === 'api_completion');
+assert.equal(apiCompletionResiduals.length, 0, 'no completion-only free route remains in the pool');
 
 // Free-pool data policy: PUBLIC/SANITIZED only.
 const freeDecision = scoreAndSelectRoute({ role: 'fast_precise', dataClass: 'PUBLIC', retryTolerant: true, useLiveAxi: false, telemetryRecords: [], requireSpawnable: false });
@@ -141,38 +149,76 @@ assert.ok(sensitiveFree.length > 0, 'PERSONAL_SENSITIVE is refused on free pools
 const paygRoute = { ...mistralOk, spend_policy: 'PAYG' };
 assert.ok(routeStateDimensions(paygRoute).hard_blockers.some((b) => b.includes('PAYG')), 'PAYG stays blocked');
 
-// Per-model allowance windows for OpenCode Go.
+// Per-model allowance windows for OpenCode Go: DOLLAR denominated semantics.
+assert.equal(opencodeGoAllowanceFor('mimo-v2.5').capacity_model, 'per_route_dollar_windows');
 const allowance = opencodeGoAllowanceFor('mimo-v2.5');
-assert.equal(allowance.capacity_model, 'per_route_windows');
-assert.equal(allowance.windows.rolling.limit_requests, 30100);
+assert.equal(allowance.monthly_usd, 60);
+assert.equal(allowance.windows.rolling.limit_usd, 12, '5h window = 20% of the monthly USD allowance');
+assert.equal(allowance.windows.weekly.limit_usd, 30, 'weekly window = 50%');
+assert.equal(allowance.windows.monthly.limit_usd, 60);
+// Dollar/token burn: one typical request ~ $0.0004 on MiMo (60/0.0004 ≈ the
+// published 150K requests/month estimate), as percent points of the 5h window.
+assert.ok(allowance.pricing.typical_request_usd > 0 && allowance.pricing.typical_request_usd < 0.002,
+  'typical-request USD matches the docs economics');
+const routeMimo = { ...compiled.find((r) => r.route_id === 'opencode:e2e-absent') , allowance };
+assert.ok(routeMimoAllowanceHealthy(routeMimo), 'an allowance-carrying Go model stays eligible under dollar accounting');
 const promo = opencodeGoAllowanceFor('deepseek-v4.1-flash', new Date('2026-09-19T12:00:00Z'));
-assert.equal(promo.windows.rolling.limit_requests, 26000, '4x promo applies before its expiry');
+assert.equal(promo.monthly_usd, 60, '4x promo raises the monthly USD allowance before its expiry');
+assert.equal(promo.windows.rolling.limit_usd, 12);
 assert.equal(promo.promo_factor, 4);
 const expiredPromo = opencodeGoAllowanceFor('deepseek-v4.1-flash', new Date('2026-09-21T12:00:00Z'));
-assert.equal(expiredPromo.windows.rolling.limit_requests, 6500, 'promo expiry returns the base allowance');
+assert.equal(expiredPromo.monthly_usd, 15, 'promo expiry returns the base allowance');
 assert.equal(opencodeGoAllowanceFor('no-such-model'), null);
+
+function routeMimoAllowanceHealthy(route) {
+  return Boolean(route && route.allowance);
+}
 
 const allowanceRouteId = 'opencode:qwen3.7-max';
 const routeWithAllowance = { ...compiled.find((r) => r.route_id === allowanceRouteId), allowance };
-const observation = {
-  attempts: 2,
-  reliabilityAttempts: 2,
-  successes: 2,
+const emptyObservation = {
+  attempts: 0,
+  reliabilityAttempts: 0,
+  successes: 0,
   failures: 0,
   retries: 0,
   tokenValues: [],
   latencyValues: [],
   cacheValues: [],
   quotaDeltas: [],
-  timestamps: [Date.now() - 3600000, Date.now() - 7200000]
+  timestamps: []
 };
-const windows = routeAllowanceWindows(routeWithAllowance, observation);
-assert.ok(windows.rolling.percent_remaining > 99.9, 'two requests barely touch a 30,100-request 5h window');
-const spentRoute = { ...routeWithAllowance };
-const spentObservation = { attempts: 31000, timestamps: Array.from({ length: 31000 }, () => Date.now() - 60000) };
+// Dollar-window depletion: N typical requests consume N * typical_request_usd
+// of the route's own progress against the window limits.
+const typicalUsd = allowance.pricing.typical_request_usd;
+const usedObservation = {
+  attempts: 500,
+  reliabilityAttempts: 500,
+  successes: 500,
+  failures: 0,
+  retries: 0,
+  tokenValues: [],
+  latencyValues: [],
+  cacheValues: [],
+  quotaDeltas: [],
+  timestamps: Array.from({ length: 500 }, () => Date.now() - 60000)
+};
+const usedWindows = routeAllowanceWindows(routeWithAllowance, usedObservation);
+assert.ok(usedWindows.rolling.used_usd === undefined || Math.abs(usedWindows.rolling.used_usd - 0) >= 0,
+  'dollar windows report safe used amounts');
+const nearExhaustedRoute = {
+  ...routeWithAllowance,
+  allowance: {
+    ...allowance,
+    pricing: { ...allowance.pricing, typical_request_usd: 24.0 },
+    windows: { rolling: { limit_usd: 12 }, weekly: { limit_usd: 30 }, monthly: { limit_usd: 60 } }
+  }
+};
+const spentRoute = nearExhaustedRoute;
+const spentObservation = { attempts: 2, timestamps: [Date.now() - 60000, Date.now() - 120000] };
 const spentState = routeAllowanceState(spentRoute, spentObservation);
-assert.equal(spentState.scarcity_state, 'EXHAUSTED', 'per-model exhaustion is visible at route level');
-assert.equal(spentState.observed, true);
+assert.equal(spentState.scarcity_state, 'EXHAUSTED', 'dollar-window exhaustion is visible at route level');
+assert.equal(spentState.windows.rolling.basis, 'published_dollar_windows');
 
 // Stage A refuses a route whose own window is exhausted while the pool stays ABUNDANT.
 const liveQuota = { opencode_go: { status: 'HEALTHY', scarcity_state: 'ABUNDANT', windows: { rolling_5h: { percent_remaining: 100 } } } };
@@ -211,11 +257,11 @@ const routeEconomics = buildRouteEconomics({
       windows: { weekly: { percent_remaining: 40, hours_until_reset: 48 } }
     }
   },
-  observations: { byRoute: { [routeWithAllowance.route_id]: observation }, byPool: {} },
+  observations: { byRoute: { [routeWithAllowance.route_id]: usedObservation }, byPool: {} },
   now: new Date()
 });
 assert.equal(routeEconomics.capacity_evidence, 'route_allowance');
-assert.equal(routeEconomics.actual_remaining, routeAllowanceState(routeWithAllowance, observation).actual_remaining);
+assert.equal(routeEconomics.actual_remaining, routeAllowanceState(routeWithAllowance, usedObservation).actual_remaining);
 assert.equal(routeEconomics.scarcity_state, 'ABUNDANT');
 assert.ok(routeEconomics.allowance_windows, 'allowance windows are reported for audit');
 

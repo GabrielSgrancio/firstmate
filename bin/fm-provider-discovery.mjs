@@ -453,100 +453,134 @@ export function discoverOpenCodeGo({ authPath = null, fixturePath = null } = {})
   }
 }
 
-// Relative burn = qwen3.8-flash's researched requests/5h (5,400, the existing
-// minimal_burn=1.0 anchor) divided by the model's own requests/5h, rounded to
-// one decimal. Source: data/model-intelligence-mission/mission-spec-2026-09-15.md
-// section 17 and data/model-intel-research/report.md (Qwen3.6 Plus).
-// deepseek-flash is a retired alias that resolves to V4.1 Flash (same report),
-// so it inherits that burn rather than a capacity figure of its own.
-// Models with no researched requests/5h figure yet are left on the flat
-// default and BENCHMARK_ONLY below; see the release-check report for that list.
-const OPENCODE_RESEARCHED_BURN = {
-  'mimo-v2.5': { burnProfile: 'minimal_burn', expectedNormalizedBurn: 0.2 },
-  'longcat-2.0': { burnProfile: 'minimal_burn', expectedNormalizedBurn: 0.5 },
-  'glm-5.3-flash': { burnProfile: 'minimal_burn', expectedNormalizedBurn: 0.9 },
-  'qwen3.7-plus': { burnProfile: 'light_burn', expectedNormalizedBurn: 1.3 },
-  'hy3': { burnProfile: 'light_burn', expectedNormalizedBurn: 1.3 },
-  'qwen3.6-plus': { burnProfile: 'light_burn', expectedNormalizedBurn: 1.6 },
-  'minimax-m2.7': { burnProfile: 'light_burn', expectedNormalizedBurn: 1.6 },
-  'mimo-v2.5-pro': { burnProfile: 'light_burn', expectedNormalizedBurn: 1.7 },
-  'minimax-m3': { burnProfile: 'light_burn', expectedNormalizedBurn: 1.7 },
-  'kimi-k2.7-code': { burnProfile: 'moderate_burn', expectedNormalizedBurn: 4.0 },
-  'hy4-preview': { burnProfile: 'moderate_burn', expectedNormalizedBurn: 4.0 },
-  'kimi-k2.6': { burnProfile: 'moderate_burn', expectedNormalizedBurn: 4.7 },
-  'glm-5.2': { burnProfile: 'moderate_burn', expectedNormalizedBurn: 6.1 },
-  'glm-5.1': { burnProfile: 'moderate_burn', expectedNormalizedBurn: 6.1 },
-  'glm-5.3': { burnProfile: 'heavy_burn', expectedNormalizedBurn: 24.5 },
-  'qwen3.8-max': { burnProfile: 'heavy_burn', expectedNormalizedBurn: 33.8 },
-  'grok-4.6': { burnProfile: 'heavy_burn', expectedNormalizedBurn: 32.0 },
-  'deepseek-flash': { burnProfile: 'minimal_burn', expectedNormalizedBurn: 1.2 }
+// Burn contract (correction pass): capacity accounting is dollar/token
+// denominated.  A Go model's expected normalized burn is the estimated USD
+// burn of one typical request as a share of that model's own rolling 5h USD
+// window (percent points), computed from the published token prices and the
+// docs' typical-request composition — not from the "estimated requests"
+// table, which OpenCode publishes only as an estimate of typical usage.
+// Models with no published pricing row yet fall back to the BENCHMARK_ONLY
+// default until their price is researched.
+const OPENCODE_RESEARCHED_BURN = {};
+// Published per-model token pricing for OpenCode Go.  OpenCode's own docs
+// (https://opencode.ai/docs/go/, retrieved 2026-09-19) define enforcement per
+// model in DOLLAR amounts: "Usage limits are defined as monthly dollar
+// amounts. Each model has the following usage limits: 5-hour — 20% of the
+// monthly limit; weekly — 50%; and monthly — 100%."  Token prices are per 1M
+// tokens.  The docs' "estimated requests" tables are only estimates derived
+// from a typical-request token composition per model (also recorded below) and
+// are NOT request-count quotas, so capacity accounting below is dollar/token
+// denominated, never attempt-count denominated.
+// DeepSeek models have peak hours 01:00-04:00 and 06:00-10:00 UTC Mon-Fri
+// (off-peak otherwise); the DeepSeek V4.1/Flash promo (4x, ends Sep 20) is
+// encoded as expiring overrides.
+const OPENCODE_GO_ALLOWANCE_RETRIEVED_AT = '2026-09-19';
+const OPENCODE_GO_MODEL_PRICING = {
+  'glm-5.3-flash': { input: 0.15, output: 0.50, cache_read: 0.03, cache_write: 0, monthly_usd: 60, composition: { input: 1000, cached: 55000, output: 200 } },
+  'glm-5.3': { input: 1.40, output: 4.40, cache_read: 0.26, cache_write: 0, monthly_usd: 15, composition: { input: 700, cached: 52000, output: 150 } },
+  'glm-5.2': { input: 1.40, output: 4.40, cache_read: 0.26, cache_write: 0, monthly_usd: 60, composition: { input: 700, cached: 52000, output: 150 } },
+  'glm-5.1': { input: 1.40, output: 4.40, cache_read: 0.26, cache_write: 0, monthly_usd: 60, composition: { input: 700, cached: 52000, output: 150 } },
+  'kimi-k3': { input: 3.00, output: 15.00, cache_read: 0.30, cache_write: 0, monthly_usd: 15, composition: { input: 1050, cached: 76500, output: 300 } },
+  'kimi-k2.7-code': { input: 0.95, output: 4.00, cache_read: 0.19, cache_write: 0, monthly_usd: 60, composition: { input: 870, cached: 55000, output: 200 } },
+  'kimi-k2.6': { input: 0.95, output: 4.00, cache_read: 0.16, cache_write: 0, monthly_usd: 60, composition: { input: 870, cached: 55000, output: 200 } },
+  'longcat-2.0': { input: 0.30, output: 1.20, cache_read: 0.006, cache_write: 0, monthly_usd: 60, composition: { input: 920, cached: 88900, output: 200 } },
+  'mimo-v2.5': { input: 0.14, output: 0.28, cache_read: 0.0028, cache_write: 0, monthly_usd: 60, composition: { input: 830, cached: 71500, output: 295 } },
+  'mimo-v2.5-pro': { input: 0.435, output: 0.87, cache_read: 0.003625, cache_write: 0, monthly_usd: 15, composition: { input: 790, cached: 86000, output: 305 } },
+  'minimax-m3': { input: 0.30, output: 1.20, cache_read: 0.06, cache_write: 0, monthly_usd: 60, composition: { input: 510, cached: 56000, output: 190 } },
+  'minimax-m2.7': { input: 0.30, output: 1.20, cache_read: 0.06, cache_write: 0.375, monthly_usd: 60, composition: { input: 300, cached: 55000, output: 125 } },
+  'muse-spark-1.3-contributor': { input: 0.10, output: 0.20, cache_read: 0.002, cache_write: 0, monthly_usd: 60, composition: { input: 620, cached: 71400, output: 300 } },
+  'muse-spark-1.2-contributor': { input: 0.10, output: 0.20, cache_read: 0.002, cache_write: 0, monthly_usd: 60, composition: { input: 620, cached: 71400, output: 300 } },
+  'qwen3.8-max': { input: 2.00, output: 6.00, cache_read: 0.25, cache_write: 2.50, monthly_usd: 15, composition: { input: 420, cached: 66000, output: 200 } },
+  'qwen3.8-flash': { input: 0.15, output: 0.47, cache_read: 0.016, cache_write: 0.20, monthly_usd: 30, composition: { input: 600, cached: 58000, output: 200 } },
+  'qwen3.7-max': { input: 2.50, output: 7.50, cache_read: 0.50, cache_write: 3.125, monthly_usd: 30, composition: { input: 420, cached: 66000, output: 200 } },
+  'qwen3.7-plus': { input: 0.40, output: 1.60, cache_read: 0.04, cache_write: 0.50, monthly_usd: 60, composition: { input: 500, cached: 57000, output: 190 } },
+  'qwen3.6-plus': { input: 0.50, output: 3.00, cache_read: 0.05, cache_write: 0.625, monthly_usd: 60, composition: { input: 500, cached: 57000, output: 190 } },
+  // DeepSeek peak hours are 01:00-04:00 and 06:00-10:00 UTC, Mon-Fri.
+  'deepseek-v4.1-flash': {
+    input: 0.15, output: 0.60, cache_read: 0.003, cache_write: 0, monthly_usd: 15, composition: { input: 410, cached: 71300, output: 310 },
+    peak: { input: 0.30, output: 1.20, cache_read: 0.006 },
+    promo: { monthly_usd: 60, valid_until: '2026-09-20' }
+  },
+  // Retired alias resolving to V4.1 Flash; same pricing, same promo.
+  'deepseek-flash': {
+    input: 0.15, output: 0.60, cache_read: 0.003, cache_write: 0, monthly_usd: 15, composition: { input: 410, cached: 71300, output: 310 },
+    peak: { input: 0.30, output: 1.20, cache_read: 0.006 },
+    promo: { monthly_usd: 60, valid_until: '2026-09-20' }
+  },
+  'deepseek-v4-pro': { input: 0.66, output: 1.98, cache_read: 0.022, cache_write: 0, monthly_usd: 15, composition: { input: 750, cached: 82000, output: 290 }, peak: { input: 1.32, output: 3.96, cache_read: 0.044 } },
+  'deepseek-v4-flash': { input: 0.15, output: 0.60, cache_read: 0.003, cache_write: 0, monthly_usd: 30, composition: { input: 410, cached: 71300, output: 310 }, peak: { input: 0.30, output: 1.20, cache_read: 0.006 } },
+  'deepseek-v4-flash-vision-exp': { input: 0.15, output: 0.60, cache_read: 0.003, cache_write: 0, monthly_usd: 15, composition: { input: 410, cached: 71300, output: 310 }, peak: { input: 0.30, output: 1.20, cache_read: 0.006 } },
+  'hy4-preview': { input: 0.834, output: 2.501, cache_read: 0.042, cache_write: 0, monthly_usd: 30, composition: { input: 830, cached: 71500, output: 295 } },
+  'hy3': { input: 0.14, output: 0.58, cache_read: 0.035, cache_write: 0, monthly_usd: 60, composition: { input: 830, cached: 71500, output: 295 } },
+  'grok-4.6': { input: 2.00, output: 6.00, cache_read: 0.50, cache_write: 0, monthly_usd: 15, composition: { input: 390, cached: 32500, output: 120 } },
+  'gpt-5.6-luna': { input: 0.20, output: 1.20, cache_read: 0.02, cache_write: 0.25, monthly_usd: 15, composition: { input: 1000, cached: 50000, output: 220 } }
 };
 
-// Published per-model allowance windows for OpenCode Go.  OpenCode's own docs
-// (https://opencode.ai/docs/go/, retrieved 2026-09-18) define enforcement per
-// model: 5h = 20% of the model's monthly limit, weekly = 50%, monthly = 100%.
-// The /zen/go/v1/usage endpoint reports only an aggregate summary, so these
-// published per-model request counts are the capacity data the Router models.
-// DeepSeek V4.1 Flash carries a provider-advertised temporary 4x increase
-// (ends 2026-09-20) encoded as promo override with its own expiry.
-const OPENCODE_GO_ALLOWANCE_RETRIEVED_AT = '2026-09-18';
-const OPENCODE_GO_MODEL_ALLOWANCES = {
-  'glm-5.3-flash': { monthly_usd: 60, requests_per_5h: 6320, requests_per_week: 15790, requests_per_month: 31580 },
-  'glm-5.3': { monthly_usd: 15, requests_per_5h: 220, requests_per_week: 540, requests_per_month: 1080 },
-  'glm-5.2': { monthly_usd: 60, requests_per_5h: 880, requests_per_week: 2150, requests_per_month: 4300 },
-  'glm-5.1': { monthly_usd: 60, requests_per_5h: 880, requests_per_week: 2150, requests_per_month: 4300 },
-  'kimi-k3': { monthly_usd: 15, requests_per_5h: 110, requests_per_week: 250, requests_per_month: 490 },
-  'kimi-k2.7-code': { monthly_usd: 60, requests_per_5h: 1350, requests_per_week: 3380, requests_per_month: 6750 },
-  'kimi-k2.6': { monthly_usd: 60, requests_per_5h: 1150, requests_per_week: 2880, requests_per_month: 5750 },
-  'longcat-2.0': { monthly_usd: 60, requests_per_5h: 11400, requests_per_week: 28600, requests_per_month: 57200 },
-  'mimo-v2.5': { monthly_usd: 60, requests_per_5h: 30100, requests_per_week: 75200, requests_per_month: 150400 },
-  'mimo-v2.5-pro': { monthly_usd: 15, requests_per_5h: 3250, requests_per_week: 8150, requests_per_month: 16300 },
-  'minimax-m3': { monthly_usd: 60, requests_per_5h: 3200, requests_per_week: 8000, requests_per_month: 16000 },
-  'minimax-m2.7': { monthly_usd: 60, requests_per_5h: 3400, requests_per_week: 8500, requests_per_month: 17000 },
-  'muse-spark-1.3-contributor': { monthly_usd: 60, requests_per_5h: 45300, requests_per_week: 113300, requests_per_month: 226600 },
-  'muse-spark-1.2-contributor': { monthly_usd: 60, requests_per_5h: 45300, requests_per_week: 113300, requests_per_month: 226600 },
-  'qwen3.8-max': { monthly_usd: 15, requests_per_5h: 160, requests_per_week: 400, requests_per_month: 810 },
-  'qwen3.8-flash': { monthly_usd: 30, requests_per_5h: 5400, requests_per_week: 13500, requests_per_month: 27000 },
-  'qwen3.7-max': { monthly_usd: 30, requests_per_5h: 170, requests_per_week: 420, requests_per_month: 840 },
-  'qwen3.7-plus': { monthly_usd: 60, requests_per_5h: 4300, requests_per_week: 10800, requests_per_month: 21600 },
-  'qwen3.6-plus': { monthly_usd: 60, requests_per_5h: 3300, requests_per_week: 8200, requests_per_month: 16300 },
-  'deepseek-v4.1-flash': {
-    monthly_usd: 15, requests_per_5h: 6500, requests_per_week: 16250, requests_per_month: 32500,
-    promo: { monthly_usd: 60, requests_per_5h: 26000, requests_per_week: 65000, requests_per_month: 130000, valid_until: '2026-09-20' }
-  },
-  'deepseek-flash': {
-    monthly_usd: 15, requests_per_5h: 6500, requests_per_week: 16250, requests_per_month: 32500,
-    promo: { monthly_usd: 60, requests_per_5h: 26000, requests_per_week: 65000, requests_per_month: 130000, valid_until: '2026-09-20' }
-  },
-  'deepseek-v4-pro': { monthly_usd: 15, requests_per_5h: 1050, requests_per_week: 2600, requests_per_month: 5200 },
-  'deepseek-v4-flash': { monthly_usd: 30, requests_per_5h: 13000, requests_per_week: 32500, requests_per_month: 65000 },
-  'deepseek-v4-flash-vision-exp': { monthly_usd: 15, requests_per_5h: 6500, requests_per_week: 16250, requests_per_month: 32500 },
-  'hy4-preview': { monthly_usd: 30, requests_per_5h: 1350, requests_per_week: 3380, requests_per_month: 6770 },
-  'hy3': { monthly_usd: 60, requests_per_5h: 4300, requests_per_week: 10750, requests_per_month: 21500 },
-  'grok-4.6': { monthly_usd: 15, requests_per_5h: 169, requests_per_week: 423, requests_per_month: 845 },
-  'gpt-5.6-luna': { monthly_usd: 15, requests_per_5h: 2050, requests_per_week: 5100, requests_per_month: 10250 }
-};
+// Is `when` (default now) inside a documented DeepSeek peak window?
+// Peak hours are 01:00-04:00 and 06:00-10:00 UTC, Monday through Friday.
+export function isOpencodeGoPeakHour(now = new Date()) {
+  const d = now instanceof Date ? now : new Date(now);
+  const day = d.getUTCDay();
+  if (day === 0 || day === 6) return false;
+  const h = d.getUTCHours();
+  return (h >= 1 && h < 4) || (h >= 6 && h < 10);
+}
+
+// USD cost estimate for one request at a given token scale.  The docs'
+// typical-request composition scales proportionally, so a request twice the
+// typical size costs twice the typical USD burn.  Real token splits
+// (prompt/cache/output) replace the composition when the caller has them.
+export function estimateAttemptUsd(pricing, { promptTokens = null, cachedTokens = null, outputTokens = null, attemptScale = 1 } = {}) {
+  if (!pricing || !pricing.composition) return null;
+  const peak = isOpencodeGoPeakHour();
+  const inPrice = peak && pricing.peak ? pricing.peak.input : pricing.input;
+  const outPrice = peak && pricing.peak ? pricing.peak.output : pricing.output;
+  const readPrice = peak && pricing.peak ? pricing.peak.cache_read : pricing.cache_read;
+  let cost = 0;
+  if (promptTokens !== null && Number.isFinite(promptTokens) && promptTokens > 0) {
+    const cached = Number.isFinite(cachedTokens) && cachedTokens > 0 ? Math.min(cachedTokens, promptTokens) : 0;
+    const out = Number.isFinite(outputTokens) && outputTokens >= 0 ? outputTokens : 0;
+    cost = (Math.max(0, promptTokens - cached) * inPrice + cached * readPrice + out * outPrice) / 1e6;
+  } else {
+    const c = pricing.composition;
+    cost = (c.input * attemptScale * inPrice + c.cached * attemptScale * readPrice + c.output * attemptScale * outPrice) / 1e6;
+  }
+  return cost;
+}
 
 export function opencodeGoAllowanceFor(rawId, now = new Date()) {
-  const base = OPENCODE_GO_MODEL_ALLOWANCES[rawId];
+  const base = OPENCODE_GO_MODEL_PRICING[rawId];
   if (!base) return null;
-  const spec = base.promo && !Number.isNaN(new Date(base.promo.valid_until).getTime()) &&
-    now <= new Date(`${base.promo.valid_until}T23:59:59Z`).getTime() ? base.promo : base;
+  // The promo raises the monthly USD allowance (4x); it expires on its own date.
+  const promoActive = base.promo && !Number.isNaN(new Date(base.promo.valid_until).getTime()) &&
+    now <= new Date(`${base.promo.valid_until}T23:59:59Z`).getTime();
+  const monthlyUsd = promoActive ? base.promo.monthly_usd : base.monthly_usd;
   return {
-    capacity_model: 'per_route_windows',
-    monthly_usd: spec.monthly_usd,
+    capacity_model: 'per_route_dollar_windows',
+    monthly_usd: monthlyUsd,
+    // Enforcement is dollar-denominated: 5h = 20% of the model's monthly
+    // allowance, weekly = 50%, monthly = 100% (https://opencode.ai/docs/go/,
+    // retrieved 2026-09-19).
     windows: {
-      rolling: { limit_requests: spec.requests_per_5h },
-      weekly: { limit_requests: spec.requests_per_week },
-      monthly: { limit_requests: spec.requests_per_month }
+      rolling: { limit_usd: monthlyUsd * 0.2 },
+      weekly: { limit_usd: monthlyUsd * 0.5 },
+      monthly: { limit_usd: monthlyUsd }
+    },
+    pricing: {
+      input_usd_per_mtok: base.input,
+      output_usd_per_mtok: base.output,
+      cache_read_usd_per_mtok: base.cache_read,
+      cache_write_usd_per_mtok: base.cache_write,
+      typical_request_composition: base.composition,
+      typical_request_usd: estimateAttemptUsd(base, {})
     },
     source: 'https://opencode.ai/docs/go/',
     retrieved_at: OPENCODE_GO_ALLOWANCE_RETRIEVED_AT,
-    ...(spec !== base ? { promo_valid_until: base.promo.valid_until, promo_factor: 4 } : {})
+    ...(promoActive ? { promo_valid_until: base.promo.valid_until, promo_factor: 4 } : {})
   };
 }
 
-function normalizeOpenCodeCatalog(data) {
+function normalizeOpenCodeCatalog(data, now0 = new Date()) {
   const rawModels = Array.isArray(data) ? data : (data.data || []);
   const now = new Date().toISOString();
   const models = rawModels.map(m => {
@@ -555,26 +589,14 @@ function normalizeOpenCodeCatalog(data) {
     let expectedNormalizedBurn = 4.0;
     let status = 'ROUTING_ELIGIBLE';
 
-    if (id.includes('qwen3.8-flash')) {
-      burnProfile = 'minimal_burn';
-      expectedNormalizedBurn = 1.0;
-    } else if (id.includes('deepseek-v4-flash') || id.includes('deepseek-v4.1-flash')) {
-      burnProfile = 'minimal_burn';
-      expectedNormalizedBurn = 1.2;
-    } else if (id.includes('gpt-5.6-luna')) {
-      burnProfile = 'light_burn';
-      expectedNormalizedBurn = 1.5;
-    } else if (id.includes('muse-spark')) {
-      burnProfile = 'light_burn';
-      expectedNormalizedBurn = 2.0;
-    } else if (id.includes('kimi-k3')) {
-      burnProfile = 'moderate_burn';
-      expectedNormalizedBurn = 3.0;
-    } else if (id.includes('qwen3.7-max')) {
-      burnProfile = 'heavy_burn';
-      expectedNormalizedBurn = 12.5;
-    } else if (OPENCODE_RESEARCHED_BURN[id]) {
-      ({ burnProfile, expectedNormalizedBurn } = OPENCODE_RESEARCHED_BURN[id]);
+    const allowance = opencodeGoAllowanceFor(id, now0);
+    if (allowance) {
+      // Dollar/token burn: one typical request's USD cost as percent points of
+      // the model's own rolling 5h USD window.
+      expectedNormalizedBurn =
+        Number((allowance.pricing.typical_request_usd / allowance.windows.rolling.limit_usd * 100).toFixed(6));
+      const pct = expectedNormalizedBurn;
+      burnProfile = pct < 0.01 ? 'minimal_burn' : pct < 0.05 ? 'light_burn' : pct < 0.5 ? 'moderate_burn' : 'heavy_burn';
     } else {
       status = 'BENCHMARK_ONLY';
     }
@@ -586,7 +608,7 @@ function normalizeOpenCodeCatalog(data) {
       quota_pool: 'opencode_go',
       burn_profile: burnProfile,
       expected_normalized_burn: expectedNormalizedBurn,
-      ...(opencodeGoAllowanceFor(id) ? { allowance: opencodeGoAllowanceFor(id) } : {}),
+      ...(allowance ? { allowance } : {}),
       smoke_tested: false,
       test_outcome: 'untested',
       routing_status: status,
@@ -874,45 +896,91 @@ export async function discoverFreeProviders({ keys = readFreeProviderKeys(), fix
   };
 }
 
-// Route targets for the free pool.  Completion routes carry harness: null and
-// route_kind: 'api_completion' (Stage A refuses them agent dispatches); OpenCode
-// Zen free models are real agent-session routes through the opencode harness.
+// Route targets for the free pool.  Every free provider is hosted behind the
+// EXISTING opencode agent harness as a custom @ai-sdk/openai-compatible
+// provider (OpenCode "provider" config), so free providers are real spawnable
+// agent routes rather than completion-only stubs.  The generated config
+// (data/provider-catalogs/opencode-custom-providers.json) carries no secrets:
+// api keys are "{env:<VAR>}" references the OpenCode client resolves from a
+// locally sourced keys file.
+// Endpoints verified live 2026-09-19 (kilo /v1/models 200 with 22 explicit
+// free ids; google and cloudflare chat/completions 200 on a real model).
+export const FREE_PROVIDER_TRANSPORTS = {
+  groq: { opencode_provider_id: 'groq', baseURL: 'https://api.groq.com/openai/v1', env_key: 'GROQ_API_KEY' },
+  openrouter: { opencode_provider_id: 'openrouter', baseURL: 'https://openrouter.ai/api/v1', env_key: 'OPENROUTER_API_KEY' },
+  nvidia_nim: { opencode_provider_id: 'nvidia', baseURL: 'https://integrate.api.nvidia.com/v1', env_key: 'NVIDIA_API_KEY' },
+  mistral: { opencode_provider_id: 'mistral', baseURL: 'https://api.mistral.ai/v1', env_key: 'MISTRAL_API_KEY' },
+  kilo: { opencode_provider_id: 'kilo', baseURL: 'https://api.kilo.ai/api/gateway/v1', env_key: 'KILO_API_KEY' },
+  google_ai_studio: { opencode_provider_id: 'google-aistudio', baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai', env_key: 'GOOGLE_API_KEY' },
+  cloudflare_workers_ai: { opencode_provider_id: 'cloudflare-wai', env_key: 'CLOUDFLARE_API_TOKEN', account_env_key: 'CLOUDFLARE_ACCOUNT_ID', baseURL: 'https://api.cloudflare.com/client/v4/accounts/{CLOUDFLARE_ACCOUNT_ID}/ai/v1' }
+};
+
+const FREE_PROVIDER_POOL_BY_CATALOG = {
+  groq: 'groq_free',
+  openrouter: 'openrouter_free',
+  nvidia_nim: 'nvidia_nim',
+  mistral: 'mistral_free',
+  kilo: 'kilo_free',
+  google_ai_studio: 'google_ai_studio',
+  cloudflare_workers_ai: 'cloudflare_workers_ai'
+};
+
+// Writes the OpenCode custom-provider definition file used by fm-spawn.  No
+// secret value ever enters this file; the keys file is sourced by the spawn
+// launcher and referenced through {env:<VAR>} interpolations.
+export function writeOpenCodeCustomProviders(freeProviders, { keysPath = null } = {}) {
+  const def = {
+    generated_at: new Date().toISOString(),
+    npm_package: '@ai-sdk/openai-compatible',
+    keys_file: keysPath || process.env.FM_FREE_PROVIDER_KEYS_FILE || FREE_PROVIDER_DEFAULT_KEYS_PATH,
+    providers: {}
+  };
+  for (const [catalog, transport] of Object.entries(FREE_PROVIDER_TRANSPORTS)) {
+    const catalogData = freeProviders[catalog];
+    if (!catalogData || catalogData.count === 0) continue;
+    const account = transport.account_env_key ? (readFreeProviderKeys()[transport.account_env_key] || '') : '';
+    const baseURL = String(transport.baseURL).replace('{CLOUDFLARE_ACCOUNT_ID}', account);
+    def.providers[transport.opencode_provider_id] = {
+      catalog,
+      baseURL,
+      api_key_env: transport.env_key,
+      models: Object.fromEntries(catalogData.models.map((m) => [m.raw_id, { name: m.display_name || m.raw_id }]))
+    };
+  }
+  // OpenCode Zen free models ride the built-in opencode provider inside the
+  // OpenCode client, so they need no custom provider entry.
+  fs.writeFileSync(path.join(CATALOG_DIR, 'opencode-custom-providers.json'), JSON.stringify(def, null, 2));
+  return def;
+}
+
 export function compileFreeRouteTargets(freeProviders) {
   const routes = [];
-  const definitions = [
-    { catalog: 'groq', routePrefix: 'groq', provider: 'groq', pool: 'groq_free', transport: 'openai_compatible_http' },
-    { catalog: 'openrouter', routePrefix: 'openrouter', provider: 'openrouter', pool: 'openrouter_free', transport: 'openai_compatible_http' },
-    { catalog: 'nvidia_nim', routePrefix: 'nvidia', provider: 'nvidia', pool: 'nvidia_nim', transport: 'openai_compatible_http' },
-    { catalog: 'mistral', routePrefix: 'mistral', provider: 'mistral', pool: 'mistral_free', transport: 'openai_compatible_http' },
-    { catalog: 'kilo', routePrefix: 'kilo', provider: 'kilo', pool: 'kilo_free', transport: 'openai_compatible_http' },
-    { catalog: 'google_ai_studio', routePrefix: 'google', provider: 'google', pool: 'google_ai_studio', transport: 'google_generate_content' },
-    { catalog: 'cloudflare_workers_ai', routePrefix: 'cloudflare', provider: 'cloudflare', pool: 'cloudflare_workers_ai', transport: 'cloudflare_workers_ai' }
-  ];
-  for (const def of definitions) {
-    const catalog = freeProviders[def.catalog];
+  for (const [catalogName, transport] of Object.entries(FREE_PROVIDER_TRANSPORTS)) {
+    const catalog = freeProviders[catalogName];
     if (!catalog || catalog.count === 0) continue;
     for (const m of catalog.models) {
       const isAuto = m.auto_routing === true;
       routes.push({
-        route_id: `${def.routePrefix}:${m.raw_id}`,
+        route_id: `${transport.opencode_provider_id}:${m.raw_id}`,
         model_family: m.raw_id.replace(':free', ''),
         logical_alias: m.raw_id,
-        resolved_runtime_model: m.raw_id,
-        provider: def.provider,
-        harness: null,
-        route_kind: 'api_completion',
+        resolved_runtime_model: `${transport.opencode_provider_id}/${m.raw_id}`,
+        provider: transport.opencode_provider_id,
+        harness: 'opencode',
+        route_kind: 'agent_session',
         free_tier: true,
         spend_policy: 'FREE_RATE_LIMITED',
         auto_routing: isAuto,
         ...(m.may_train_on_prompts !== undefined ? { may_train_on_prompts: m.may_train_on_prompts } : {}),
-        provider_path: def.transport,
+        provider_path: 'opencode_custom_provider',
+        ...(isAuto ? { auto_route: true } : {}),
         reasoning_effort: null,
-        quota_pool: def.pool,
+        quota_pool: FREE_PROVIDER_POOL_BY_CATALOG[catalogName],
         // A free request's marginal cost is its share of the provider's
         // rate-limit budget, not zero and not subscription quota.
         expected_normalized_burn: 0.05,
         quota_burn_model: 'free_rate_limited',
-        data_profile: def.pool,
+        data_profile: FREE_PROVIDER_POOL_BY_CATALOG[catalogName],
         discovery_source: catalog.source,
         discovered_at: catalog.discovered_at,
         resolved_at: catalog.discovered_at,
@@ -972,7 +1040,7 @@ export function seedFreePools(quotaMap, freeProviders) {
     const models = catalog?.models || [];
     const anyAuthFailed = models.length > 0 && models.every((m) => m.availability === 'auth_failed');
     return {
-      harness: catalog?.transport === 'opencode_cli_agent_session' ? 'opencode' : null,
+      harness: 'opencode',
       kind: 'free_rate_limited',
       status: anyAuthFailed ? 'AUTH_FAILED' : 'HEALTHY',
       scarcity_state: 'UNKNOWN',
@@ -1413,10 +1481,10 @@ export async function refreshFreeProviderCatalogs({ quotaMapPath = path.join(FM_
     free_providers: freeProviders
   });
   fs.writeFileSync(path.join(CATALOG_DIR, 'compiled-route-targets.json'), JSON.stringify(routeTargets, null, 2));
+  writeOpenCodeCustomProviders(freeProviders);
 
   try {
     if (fs.existsSync(quotaMapPath)) {
-      const quotaMap = JSON.parse(fs.readFileSync(quotaMapPath, 'utf8'));
       seedFreePools(quotaMap, freeProviders);
       fs.writeFileSync(quotaMapPath, JSON.stringify(quotaMap, null, 2));
     }

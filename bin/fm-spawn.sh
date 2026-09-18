@@ -1532,7 +1532,7 @@ launch_template() {
         printf '%s' 'codex __MODELFLAG____EFFORTFLAG__--dangerously-bypass-approvals-and-sandbox -c "notify=[\"bash\",\"-c\",\"touch __TURNEND__\"]" "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
       fi
       ;;
-    opencode) printf '%s' 'OPENCODE_CONFIG_CONTENT='\''{"permission":{"*":"allow"}}'\'' opencode __MODELFLAG__--prompt "$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
+    opencode) printf '%s' 'set -a; [ -s __FREEKEYS__ ] && . __FREEKEYS__; set +a; OPENCODE_CONFIG_CONTENT="$(node __FMROOT__/bin/fm-opencode-provider-config.mjs --model __SPAWNMODEL__ --config __PROVCFG__)" opencode __MODELFLAG__--prompt "$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
     pi|pi-signed)
       printf '%s' '__PIBIN____PITUIMODE__'
       if [ "$kind" = secondmate ]; then
@@ -4141,6 +4141,20 @@ sq_opinput=$(shell_quote "$FM_ROOT/bin/fm-operational-input.sh")
 sq_worktree=$(shell_quote "$WT")
 MODELFLAG=$(model_flag_for_harness "$HARNESS" "$MODEL")
 EFFORTFLAG=$(effort_flag_for_harness "$HARNESS" "$EFFORT")
+# Free/completion-only providers ride the opencode harness as custom providers:
+# the config builder validates the requested model against the discovered
+# provider catalog (fail-closed on drift) and resolves api keys through
+# "{env:VAR}" references, so no secret value crosses this script.
+FREE_PROVIDER_KEYS=${FM_FREE_PROVIDER_KEYS_FILE:-"$HOME/.config/firstmate/free-provider-keys.env"}
+PROVIDER_CONFIG_PATH="$FM_HOME/data/provider-catalogs/opencode-custom-providers.json"
+sq_freeprovider_keys=$(shell_quote "$FREE_PROVIDER_KEYS")
+sq_provider_config_path=$(shell_quote "$PROVIDER_CONFIG_PATH")
+sq_spawnmodel=$(shell_quote "$MODEL")
+sq_fmroot=$(shell_quote "$FM_ROOT")
+LAUNCH=${LAUNCH//__FREEKEYS__/$sq_freeprovider_keys}
+LAUNCH=${LAUNCH//__PROVCFG__/$sq_provider_config_path}
+LAUNCH=${LAUNCH//__SPAWNMODEL__/$sq_spawnmodel}
+LAUNCH=${LAUNCH//__FMROOT__/$sq_fmroot}
 LAUNCH=${LAUNCH//__MODELFLAG__/$MODELFLAG}
 LAUNCH=${LAUNCH//__EFFORTFLAG__/$EFFORTFLAG}
 if [ "$HARNESS" = rovo ]; then

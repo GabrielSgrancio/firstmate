@@ -142,6 +142,26 @@ function routeIdForRecord(records) {
   return null;
 }
 
+// Auto-route attribution: when the executed route is auto-routing by design and
+// the completion record attests a different actual model, the observation is
+// keyed to the actually-resolved model's route (when the catalog knows it), so
+// capability evidence accumulates on the model that really ran.
+function autoRouteAttribution(groupedRecords, route, routeById) {
+  if (!route || (route.auto_route !== true && route.auto_routing !== true)) {
+    return { routeId: route?.route_id ?? null, route };
+  }
+  const completed = groupedRecords.find((record) => record.dispatch_status === 'completed') ||
+    groupedRecords[groupedRecords.length - 1] || null;
+  const target = completed?.model_attestation?.actual_model ?? completed?.actual_model ?? null;
+  if (!target || String(target) === String(route.resolved_runtime_model)) {
+    return { routeId: route.route_id, route };
+  }
+  const resolvedRoute = [...routeById.values()].find((candidate) =>
+    candidate.resolved_runtime_model === String(target) || candidate.logical_alias === String(target));
+  if (resolvedRoute) return { routeId: resolvedRoute.route_id, route: resolvedRoute };
+  return { routeId: route.route_id, route: resolvedRoute ?? route };
+}
+
 function aggregateForRoute() {
   return {
     attempts: 0,
@@ -240,10 +260,16 @@ export function collectRoutingObservations(executions = [], routes = [], now = n
   for (const groupedRecords of grouped.values()) {
     const routeId = routeIdForRecord(groupedRecords);
     const route = routeById.get(routeId);
+    // Auto routes (kilo-auto/free and similar) may resolve a different model by
+    // design: outcome evidence must be attributed to the route of the ACTUAL
+    // model, never silently credited to the auto route's requested id.
+    const routedCluster = autoRouteAttribution(groupedRecords, route, routeById);
+    const effectiveId = routedCluster.routeId;
+    const effectiveRoute = routedCluster.route || routeById.get(effectiveId);
     const latest = groupedRecords[groupedRecords.length - 1];
     const started = groupedRecords.find((record) => record.dispatch_status === 'started') || groupedRecords[0];
     const completed = groupedRecords.find((record) => record.dispatch_status === 'completed' || record.dispatch_status === 'launch_failed') || null;
-    const poolName = route?.quota_pool || started?.quota_pool || null;
+    const poolName = effectiveRoute?.quota_pool || started?.quota_pool || null;
     if (poolName && !completed) {
       const status = latest?.dispatch_status;
       const lastSeen = Math.max(...groupedRecords.map(eventTime).filter(finite));
@@ -257,7 +283,7 @@ export function collectRoutingObservations(executions = [], routes = [], now = n
         if (!previous || previous.lastSeen < lastSeen) activeByTask.set(taskId, { pool: canonical, lastSeen });
       }
     }
-    if (!routeId || !completed) continue;
+    if (!effectiveId || !completed) continue;
 
     const startedAt = eventTime(started);
     const completedAt = eventTime(completed);
@@ -278,16 +304,16 @@ export function collectRoutingObservations(executions = [], routes = [], now = n
         : calculateObservedQuotaDelta(started.quota_snapshot_before, completed.quota_snapshot_after, poolName),
       timestamp: completedAt ?? startedAt ?? nowMs
     };
-    if (!byRoute[routeId]) byRoute[routeId] = aggregateForRoute();
-    addObservation(byRoute[routeId], observation);
+    if (!byRoute[effectiveId]) byRoute[effectiveId] = aggregateForRoute();
+    addObservation(byRoute[effectiveId], observation);
     const canonical = poolName?.startsWith('opencode_go') ? 'opencode_go' : poolName;
     if (canonical) {
       if (!byPool[canonical]) byPool[canonical] = aggregateForRoute();
       addObservation(byPool[canonical], observation);
       if (observation.quotaDelta) {
         const quotaDelta = byPool[canonical].quotaDeltas[byPool[canonical].quotaDeltas.length - 1];
-        quotaDelta.route_id = routeId;
-        quotaDelta.expected_normalized_burn = route?.expected_normalized_burn;
+        quotaDelta.route_id = effectiveId;
+        quotaDelta.expected_normalized_burn = effectiveRoute?.expected_normalized_burn;
         quotaDelta.timestamp = observation.timestamp;
       }
     }
@@ -535,8 +561,10 @@ function defaultTokenUsage(route) {
 // counts against the published limits; the aggregate pool number stays a
 // reporting signal and a fallback only for routes with no allowance.
 // allowance shape: {
-//   capacity_model: 'per_route_windows',
-//   windows: { rolling: {limit_requests} | {limit_percent, share_of: 'monthly'}, daily|weekly|monthly: {limit_requests} },
+//   capacity_model: 'per_route_windows' | 'per_route_dollar_windows',
+//   windows: { rolling: {limit_requests} | {limit_usd}, daily|weekly|monthly: {limit_requests|limit_usd} },
+//   pricing?: { input_usd_per_mtok, output_usd_per_mtok, cache_read_usd_per_mtok,
+//               cache_write_usd_per_mtok, typical_request_composition, typical_request_usd },
 //   requests_per_minute?: number,
 //   source, retrieved_at
 // }
@@ -552,37 +580,80 @@ function attemptsInWindow(timestamps, nowMs, kind) {
   return timestamps.filter((t) => finite(t) && nowMs - t <= horizonMs).length;
 }
 
-// Percent remaining per window for a route with a published allowance.  Request
-// counts come from this home's own telemetry (completed attempts inside the
-// window); until a route has observations its windows report UNKNOWN headroom
-// and the caller falls back to pool-level state.
+// Percent remaining per window for a route with a published allowance.
+// Two capacity models are supported:
+// - 'per_route_windows'  (free rate-limited APIs): used = telemetry attempt
+//   counts inside the window against published request limits.
+// - 'per_route_dollar_windows' (OpenCode Go): enforcement is dollar-denominated
+//   per model (5h = 20% of the model's monthly USD allowance, weekly = 50%,
+//   monthly = 100%); used = estimated USD burn of the telemetry attempts inside
+//   the window, derived from real token usage when available and scaled from
+//   the published typical-request composition otherwise.
+// Until a route has observations its windows report UNKNOWN headroom and the
+// caller falls back to pool-level state.
 export function routeAllowanceWindows(route, routeObservation, nowMs = Date.now()) {
   const allowance = route?.allowance;
-  if (!allowance || allowance.capacity_model !== 'per_route_windows') return null;
+  if (!allowance) return null;
   const timestamps = routeObservation?.timestamps || [];
-  const monthly = allowance.windows?.monthly?.limit_requests ?? null;
   const windows = {};
-  for (const kind of ALLOWANCE_WINDOW_KINDS) {
-    const spec = allowance.windows?.[kind];
-    if (!spec) continue;
-    let limit = null;
-    let basis = null;
-    if (finite(spec.limit_requests)) {
-      limit = spec.limit_requests;
-      basis = 'published_requests';
-    } else if (finite(spec.limit_percent) && finite(monthly)) {
-      limit = monthly * (spec.limit_percent / 100);
-      basis = 'published_percent_of_monthly';
+  if (allowance.capacity_model === 'per_route_dollar_windows') {
+    const pricing = allowance.pricing || {};
+    const typicalUsd = pricing.typical_request_usd ?? null;
+    const typicalTokens = pricing.typical_request_composition
+      ? pricing.typical_request_composition.input + pricing.typical_request_composition.cached +
+        pricing.typical_request_composition.output
+      : null;
+    const tokenValues = (routeObservation?.tokenValues || []).filter(finite);
+    const meanTokens = tokenValues.length
+      ? tokenValues.reduce((sum, value) => sum + value, 0) / tokenValues.length
+      : null;
+    for (const kind of ALLOWANCE_WINDOW_KINDS) {
+      const spec = allowance.windows?.[kind];
+      if (!spec || !finite(spec.limit_usd) || spec.limit_usd <= 0) continue;
+      const used = attemptsInWindow(timestamps, nowMs, kind);
+      // Per-attempt USD: real token usage first (mean observed tokens scaled
+      // against the published composition), composition estimate as fallback.
+      const usedUsd = finite(typicalUsd)
+        ? used * (finite(meanTokens) && meanTokens > 0 && finite(typicalTokens) && typicalTokens > 0
+          ? typicalUsd * (meanTokens / typicalTokens)
+          : typicalUsd)
+        : null;
+      if (usedUsd === null) continue;
+      windows[kind] = {
+        percent_remaining: clamp(100 * (1 - usedUsd / spec.limit_usd), 0, 100),
+        limit_usd: spec.limit_usd,
+        used_usd: usedUsd,
+        used_attempts: used,
+        basis: 'published_dollar_windows',
+        hours_until_reset: null
+      };
     }
-    if (!finite(limit) || limit <= 0) continue;
-    const used = attemptsInWindow(timestamps, nowMs, kind);
-    windows[kind] = {
-      percent_remaining: clamp(100 * (1 - used / limit), 0, 100),
-      limit_requests: limit,
-      used_requests: used,
-      basis,
-      hours_until_reset: null
-    };
+  } else if (allowance.capacity_model === 'per_route_windows') {
+    const monthly = allowance.windows?.monthly?.limit_requests ?? null;
+    for (const kind of ALLOWANCE_WINDOW_KINDS) {
+      const spec = allowance.windows?.[kind];
+      if (!spec) continue;
+      let limit = null;
+      let basis = null;
+      if (finite(spec.limit_requests)) {
+        limit = spec.limit_requests;
+        basis = 'published_requests';
+      } else if (finite(spec.limit_percent) && finite(monthly)) {
+        limit = monthly * (spec.limit_percent / 100);
+        basis = 'published_percent_of_monthly';
+      }
+      if (!finite(limit) || limit <= 0) continue;
+      const used = attemptsInWindow(timestamps, nowMs, kind);
+      windows[kind] = {
+        percent_remaining: clamp(100 * (1 - used / limit), 0, 100),
+        limit_requests: limit,
+        used_requests: used,
+        basis,
+        hours_until_reset: null
+      };
+    }
+  } else {
+    return null;
   }
   if (!Object.keys(windows).length) return null;
   return windows;
@@ -724,7 +795,7 @@ export function buildRouteEconomics({
     allowance_windows: allowanceState?.observed
       ? Object.fromEntries(Object.entries(allowanceState.windows).map(([kind, w]) => [kind, {
         percent_remaining: w.percent_remaining,
-        limit_requests: w.limit_requests,
+        ...(w.limit_requests ? { limit_requests: w.limit_requests } : { limit_usd: w.limit_usd }),
         used_requests: w.used_requests,
         basis: w.basis
       }]))
