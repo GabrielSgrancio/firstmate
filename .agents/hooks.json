@@ -1,0 +1,16 @@
+{
+  "fm-deny-subagents": {
+    "PreToolUse": [
+      {
+        "matcher": "invoke_subagent|define_subagent|manage_subagents",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'SCRIPT=\"$(git rev-parse --show-toplevel 2>/dev/null || pwd)/bin/fm-subagent-pretool-check.sh\"; [ -f \"$SCRIPT\" ] && exec \"$SCRIPT\" || exit 0'",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

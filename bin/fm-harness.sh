@@ -34,6 +34,7 @@ CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 
 detect_own() {
   # Layer 1: environment markers for verified harnesses.
+  [ "${FM_HARNESS:-}" = "antigravity" ] || [ "${FM_HARNESS:-}" = "agy" ] && { echo antigravity; return; }
   # Keep marker detection before ancestry detection as an explicit precedence rule.
   # Claude, Pi, Grok, and Cursor set verified markers of their own; codex,
   # opencode, Kimi, and Muse are markerless, so a foreign marker retained in a terminal
@@ -150,10 +151,9 @@ detect_own() {
       # prefix rather than any exact name. Deliberately anchored, never *muse*, so
       # unrelated commands (musescore, amuse) cannot be misread as this harness.
       muse|muse-bin-*) echo muse; return ;;
-      # agy (Google Antigravity CLI) is markerless like kimi/codex/opencode; no
-      # verified env marker was found during 2026-08-05 smoke testing, so
-      # detection relies on process ancestry command name only.
-      agy) echo antigravity; return ;;
+      # agy (Google Antigravity CLI) detection:
+      # matches agy or antigravity process names.
+      agy|antigravity) echo antigravity; return ;;
       pi-signed) echo pi; return ;;
       pi) echo pi; return ;;
       # omp is a Bun-compiled single binary whose process name is exactly `omp`
