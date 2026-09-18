@@ -482,6 +482,70 @@ const OPENCODE_RESEARCHED_BURN = {
   'deepseek-flash': { burnProfile: 'minimal_burn', expectedNormalizedBurn: 1.2 }
 };
 
+// Published per-model allowance windows for OpenCode Go.  OpenCode's own docs
+// (https://opencode.ai/docs/go/, retrieved 2026-09-18) define enforcement per
+// model: 5h = 20% of the model's monthly limit, weekly = 50%, monthly = 100%.
+// The /zen/go/v1/usage endpoint reports only an aggregate summary, so these
+// published per-model request counts are the capacity data the Router models.
+// DeepSeek V4.1 Flash carries a provider-advertised temporary 4x increase
+// (ends 2026-09-20) encoded as promo override with its own expiry.
+const OPENCODE_GO_ALLOWANCE_RETRIEVED_AT = '2026-09-18';
+const OPENCODE_GO_MODEL_ALLOWANCES = {
+  'glm-5.3-flash': { monthly_usd: 60, requests_per_5h: 6320, requests_per_week: 15790, requests_per_month: 31580 },
+  'glm-5.3': { monthly_usd: 15, requests_per_5h: 220, requests_per_week: 540, requests_per_month: 1080 },
+  'glm-5.2': { monthly_usd: 60, requests_per_5h: 880, requests_per_week: 2150, requests_per_month: 4300 },
+  'glm-5.1': { monthly_usd: 60, requests_per_5h: 880, requests_per_week: 2150, requests_per_month: 4300 },
+  'kimi-k3': { monthly_usd: 15, requests_per_5h: 110, requests_per_week: 250, requests_per_month: 490 },
+  'kimi-k2.7-code': { monthly_usd: 60, requests_per_5h: 1350, requests_per_week: 3380, requests_per_month: 6750 },
+  'kimi-k2.6': { monthly_usd: 60, requests_per_5h: 1150, requests_per_week: 2880, requests_per_month: 5750 },
+  'longcat-2.0': { monthly_usd: 60, requests_per_5h: 11400, requests_per_week: 28600, requests_per_month: 57200 },
+  'mimo-v2.5': { monthly_usd: 60, requests_per_5h: 30100, requests_per_week: 75200, requests_per_month: 150400 },
+  'mimo-v2.5-pro': { monthly_usd: 15, requests_per_5h: 3250, requests_per_week: 8150, requests_per_month: 16300 },
+  'minimax-m3': { monthly_usd: 60, requests_per_5h: 3200, requests_per_week: 8000, requests_per_month: 16000 },
+  'minimax-m2.7': { monthly_usd: 60, requests_per_5h: 3400, requests_per_week: 8500, requests_per_month: 17000 },
+  'muse-spark-1.3-contributor': { monthly_usd: 60, requests_per_5h: 45300, requests_per_week: 113300, requests_per_month: 226600 },
+  'muse-spark-1.2-contributor': { monthly_usd: 60, requests_per_5h: 45300, requests_per_week: 113300, requests_per_month: 226600 },
+  'qwen3.8-max': { monthly_usd: 15, requests_per_5h: 160, requests_per_week: 400, requests_per_month: 810 },
+  'qwen3.8-flash': { monthly_usd: 30, requests_per_5h: 5400, requests_per_week: 13500, requests_per_month: 27000 },
+  'qwen3.7-max': { monthly_usd: 30, requests_per_5h: 170, requests_per_week: 420, requests_per_month: 840 },
+  'qwen3.7-plus': { monthly_usd: 60, requests_per_5h: 4300, requests_per_week: 10800, requests_per_month: 21600 },
+  'qwen3.6-plus': { monthly_usd: 60, requests_per_5h: 3300, requests_per_week: 8200, requests_per_month: 16300 },
+  'deepseek-v4.1-flash': {
+    monthly_usd: 15, requests_per_5h: 6500, requests_per_week: 16250, requests_per_month: 32500,
+    promo: { monthly_usd: 60, requests_per_5h: 26000, requests_per_week: 65000, requests_per_month: 130000, valid_until: '2026-09-20' }
+  },
+  'deepseek-flash': {
+    monthly_usd: 15, requests_per_5h: 6500, requests_per_week: 16250, requests_per_month: 32500,
+    promo: { monthly_usd: 60, requests_per_5h: 26000, requests_per_week: 65000, requests_per_month: 130000, valid_until: '2026-09-20' }
+  },
+  'deepseek-v4-pro': { monthly_usd: 15, requests_per_5h: 1050, requests_per_week: 2600, requests_per_month: 5200 },
+  'deepseek-v4-flash': { monthly_usd: 30, requests_per_5h: 13000, requests_per_week: 32500, requests_per_month: 65000 },
+  'deepseek-v4-flash-vision-exp': { monthly_usd: 15, requests_per_5h: 6500, requests_per_week: 16250, requests_per_month: 32500 },
+  'hy4-preview': { monthly_usd: 30, requests_per_5h: 1350, requests_per_week: 3380, requests_per_month: 6770 },
+  'hy3': { monthly_usd: 60, requests_per_5h: 4300, requests_per_week: 10750, requests_per_month: 21500 },
+  'grok-4.6': { monthly_usd: 15, requests_per_5h: 169, requests_per_week: 423, requests_per_month: 845 },
+  'gpt-5.6-luna': { monthly_usd: 15, requests_per_5h: 2050, requests_per_week: 5100, requests_per_month: 10250 }
+};
+
+export function opencodeGoAllowanceFor(rawId, now = new Date()) {
+  const base = OPENCODE_GO_MODEL_ALLOWANCES[rawId];
+  if (!base) return null;
+  const spec = base.promo && !Number.isNaN(new Date(base.promo.valid_until).getTime()) &&
+    now <= new Date(`${base.promo.valid_until}T23:59:59Z`).getTime() ? base.promo : base;
+  return {
+    capacity_model: 'per_route_windows',
+    monthly_usd: spec.monthly_usd,
+    windows: {
+      rolling: { limit_requests: spec.requests_per_5h },
+      weekly: { limit_requests: spec.requests_per_week },
+      monthly: { limit_requests: spec.requests_per_month }
+    },
+    source: 'https://opencode.ai/docs/go/',
+    retrieved_at: OPENCODE_GO_ALLOWANCE_RETRIEVED_AT,
+    ...(spec !== base ? { promo_valid_until: base.promo.valid_until, promo_factor: 4 } : {})
+  };
+}
+
 function normalizeOpenCodeCatalog(data) {
   const rawModels = Array.isArray(data) ? data : (data.data || []);
   const now = new Date().toISOString();
@@ -522,6 +586,7 @@ function normalizeOpenCodeCatalog(data) {
       quota_pool: 'opencode_go',
       burn_profile: burnProfile,
       expected_normalized_burn: expectedNormalizedBurn,
+      ...(opencodeGoAllowanceFor(id) ? { allowance: opencodeGoAllowanceFor(id) } : {}),
       smoke_tested: false,
       test_outcome: 'untested',
       routing_status: status,
@@ -544,6 +609,510 @@ function normalizeOpenCodeCatalog(data) {
 }
 
 // 5. Normalizer to RouteTargets
+// 4b. Free / zero-marginal-cost provider adapters -----------------------------
+// Zero-PAYG constraint: only free routes are registered, with the explicit
+// spend_policy FREE_RATE_LIMITED; no paid route may be created here.  Each
+// adapter discovers the live model catalog and records route-level availability
+// per model, so one dead model never disables an otherwise usable provider.
+// Keys are read from the environment or FM_FREE_PROVIDER_KEYS_FILE (default
+// ~/.config/firstmate/free-provider-keys.env) and never logged.
+
+const FREE_PROVIDER_HTTP_TIMEOUT_MS = 15000;
+
+// Documented OpenCode Zen free models (https://opencode.ai/docs/zen/ pricing
+// table, retrieved 2026-09-18).  The free tier is only callable from within the
+// OpenCode client, so these run through the opencode harness as agent sessions.
+const OPENCODE_ZEN_FREE_MODEL_IDS = [
+  'mimo-v2.5-free',
+  'ling-3.0-flash-fin-free',
+  'nemotron-3-ultra-free',
+  'nemotron-3.5-lightning-free',
+  'big-pickle',
+  'muse-spark-1.3-contributor-free'
+];
+
+const FREE_PROVIDER_DEFAULT_KEYS_PATH = path.join(process.env.HOME || '', '.config/firstmate/free-provider-keys.env');
+
+function readFreeProviderKeys() {
+  const keys = {};
+  for (const [name, value] of Object.entries(process.env)) {
+    if (/^(GROQ|OPENROUTER|NVIDIA|GOOGLE|CLOUDFLARE|MISTRAL|KILO|OPENCODE_ZEN)_.*$/.test(name) && value.trim()) {
+      keys[name] = value.trim();
+    }
+  }
+  const keysPath = process.env.FM_FREE_PROVIDER_KEYS_FILE || FREE_PROVIDER_DEFAULT_KEYS_PATH;
+  try {
+    const text = fs.readFileSync(keysPath, 'utf8');
+    for (const line of text.split('\n')) {
+      const match = line.match(/^\s*(?:export\s+)?([A-Z0-9_]+)\s*=\s*(.*)\s*$/);
+      if (match && match[1].includes('API') || match && /_(KEY|TOKEN|ACCOUNT_ID)$/.test(match[1] || '')) {
+        const value = match[2].replace(/^["']|["']$/g, '').trim();
+        if (value) keys[match[1]] = value;
+      }
+    }
+  } catch {
+    // No keys file; environment may still carry credentials.
+  }
+  return keys;
+}
+
+async function httpJson(url, headers = {}, timeoutMs = FREE_PROVIDER_HTTP_TIMEOUT_MS) {
+  const response = await fetch(url, { headers, signal: AbortSignal.timeout(timeoutMs) });
+  const text = await response.text();
+  let body = null;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    body = null;
+  }
+  return { status: response.status, ok: response.ok, body, text };
+}
+
+function freeCatalog(name, source, models, extra = {}) {
+  return {
+    harness: name,
+    free_provider: true,
+    stale: false,
+    refresh_failed: false,
+    discovered_at: new Date().toISOString(),
+    source,
+    count: models.length,
+    models,
+    ...extra
+  };
+}
+
+function unavailableFreeCatalog(name, reason) {
+  return {
+    harness: name,
+    free_provider: true,
+    stale: false,
+    refresh_failed: false,
+    discovered_at: new Date().toISOString(),
+    source: 'none',
+    unavailable_reason: reason,
+    count: 0,
+    models: []
+  };
+}
+
+// Chat-model filters keep obviously non-completion endpoints (audio, embeddings,
+// guards) out of the routing pool.  Availability starts 'unknown': uncertainty
+// is priced, never a veto.
+function looksLikeChatModel(id) {
+  return !/whisper|tts|orpheus|guard|embed|rerank|playai|deplot|ocr|diffusion|image|moderation/i.test(id);
+}
+
+function availabilityFromHttp(status, body, headers = {}) {
+  if (status === 200) return 'available';
+  if (status === 429) {
+    const zeroLimit = headers['x-ratelimit-limit-requests'] === '0' ||
+      /limit.{0,20}0\s*(req|request)/i.test(String(body?.error || body?.message || ''));
+    return zeroLimit ? 'rate_limited_zero' : 'rate_limited';
+  }
+  if (status === 403) return 'tier_blocked';
+  if (status === 401) return 'auth_failed';
+  if (status === 404 || status === 410) return 'model_unavailable';
+  return null; // transient (5xx/timeout): leave unknown
+}
+
+async function discoverOpenAICompatibleFreeProvider({
+  name,
+  modelsUrl,
+  headers,
+  modelFilter = looksLikeChatModel,
+  nameFromResponse = null
+}) {
+  let result;
+  try {
+    result = await httpJson(modelsUrl, headers);
+  } catch (error) {
+    return unavailableFreeCatalog(name, `catalog request failed: ${String(error.message || error).slice(0, 120)}`);
+  }
+  if (!result.ok || !Array.isArray(result.body?.data)) {
+    return unavailableFreeCatalog(name, `catalog returned HTTP ${result.status}`);
+  }
+  const models = result.body.data
+    .map((m) => m.id)
+    .filter(Boolean)
+    .filter(modelFilter)
+    .map((id) => ({
+      raw_id: id,
+      display_name: nameFromResponse ? nameFromResponse(id) : id,
+      availability: 'unknown'
+    }));
+  return freeCatalog(name, modelsUrl, models, { transport: 'openai_compatible_http' });
+}
+
+export async function discoverFreeProviders({ keys = readFreeProviderKeys(), fixturePath = null } = {}) {
+  if (fixturePath) {
+    return JSON.parse(fs.readFileSync(fixturePath, 'utf8'));
+  }
+  const auth = (key) => ({ Authorization: `Bearer ${key}` });
+
+  const groq = keys.GROQ_API_KEY
+    ? discoverOpenAICompatibleFreeProvider({ name: 'groq', modelsUrl: 'https://api.groq.com/openai/v1/models', headers: auth(keys.GROQ_API_KEY) })
+    : unavailableFreeCatalog('groq', 'no GROQ_API_KEY');
+
+  const openrouter = keys.OPENROUTER_API_KEY
+    ? discoverOpenAICompatibleFreeProvider({
+      name: 'openrouter',
+      modelsUrl: 'https://openrouter.ai/api/v1/models',
+      headers: auth(keys.OPENROUTER_API_KEY),
+      modelFilter: (id) => id.endsWith(':free')
+    })
+    : unavailableFreeCatalog('openrouter', 'no OPENROUTER_API_KEY');
+
+  const nvidia = keys.NVIDIA_API_KEY
+    ? discoverOpenAICompatibleFreeProvider({ name: 'nvidia_nim', modelsUrl: 'https://integrate.api.nvidia.com/v1/models', headers: auth(keys.NVIDIA_API_KEY) })
+    : unavailableFreeCatalog('nvidia_nim', 'no NVIDIA_API_KEY');
+
+  const mistral = keys.MISTRAL_API_KEY
+    ? discoverOpenAICompatibleFreeProvider({ name: 'mistral', modelsUrl: 'https://api.mistral.ai/v1/models', headers: auth(keys.MISTRAL_API_KEY) })
+    : unavailableFreeCatalog('mistral', 'no MISTRAL_API_KEY');
+
+  const kilo = (async () => {
+    if (!keys.KILO_API_KEY) return unavailableFreeCatalog('kilo', 'no KILO_API_KEY');
+    try {
+      const result = await httpJson('https://api.kilo.ai/api/gateway/models', auth(keys.KILO_API_KEY));
+      const data = Array.isArray(result.body?.data) ? result.body.data : [];
+      const freeModels = data.filter((m) => m.isFree === true && m.id !== 'kilo-auto/free');
+      const autoFree = data.find((m) => m.id === 'kilo-auto/free');
+      const models = freeModels.map((m) => ({
+        raw_id: m.id,
+        display_name: m.name || m.id,
+        availability: 'unknown',
+        may_train_on_prompts: m.mayTrainOnYourPrompts === true,
+        context_window: m.context_length ?? null
+      }));
+      if (autoFree) {
+        models.push({
+          raw_id: autoFree.id,
+          display_name: autoFree.name || autoFree.id,
+          availability: 'unknown',
+          auto_routing: true,
+          may_train_on_prompts: autoFree.mayTrainOnYourPrompts === true,
+          context_window: autoFree.context_length ?? null
+        });
+      }
+      return freeCatalog('kilo', 'https://api.kilo.ai/api/gateway/models', models, { transport: 'openai_compatible_http' });
+    } catch (error) {
+      return unavailableFreeCatalog('kilo', `catalog request failed: ${String(error.message || error).slice(0, 120)}`);
+    }
+  })();
+
+  const google = (async () => {
+    if (!keys.GOOGLE_API_KEY) return unavailableFreeCatalog('google_ai_studio', 'no GOOGLE_API_KEY');
+    try {
+      const result = await httpJson(`https://generativelanguage.googleapis.com/v1beta/models?key=${keys.GOOGLE_API_KEY}&pageSize=1000`);
+      const chat = (result.body?.models || [])
+        .filter((m) => (m.supportedGenerationMethods || []).includes('generateContent'))
+        .map((m) => m.name.replace(/^models\//, ''))
+        .filter(looksLikeChatModel);
+      return freeCatalog(
+        'google_ai_studio',
+        'https://generativelanguage.googleapis.com/v1beta/models',
+        chat.map((id) => ({ raw_id: id, display_name: id, availability: 'unknown' })),
+        { transport: 'google_generate_content' }
+      );
+    } catch (error) {
+      return unavailableFreeCatalog('google_ai_studio', `catalog request failed: ${String(error.message || error).slice(0, 120)}`);
+    }
+  })();
+
+  const cloudflare = (async () => {
+    if (!keys.CLOUDFLARE_API_TOKEN || !keys.CLOUDFLARE_ACCOUNT_ID) {
+      return unavailableFreeCatalog('cloudflare_workers_ai', 'no CLOUDFLARE_API_TOKEN or CLOUDFLARE_ACCOUNT_ID');
+    }
+    try {
+      const result = await httpJson(
+        `https://api.cloudflare.com/client/v4/accounts/${keys.CLOUDFLARE_ACCOUNT_ID}/ai/models/search?per_page=1000`,
+        auth(keys.CLOUDFLARE_API_TOKEN)
+      );
+      const textModels = (result.body?.result || [])
+        .filter((m) => m.task?.name === 'Text Generation')
+        .map((m) => m.name);
+      return freeCatalog(
+        'cloudflare_workers_ai',
+        'https://api.cloudflare.com/client/v4/accounts/*/ai/models/search',
+        textModels.map((id) => ({ raw_id: id, display_name: id, availability: 'unknown' })),
+        { transport: 'cloudflare_workers_ai' }
+      );
+    } catch (error) {
+      return unavailableFreeCatalog('cloudflare_workers_ai', `catalog request failed: ${String(error.message || error).slice(0, 120)}`);
+    }
+  })();
+
+  const zen = (async () => {
+    if (!keys.OPENCODE_ZEN_KEY) return unavailableFreeCatalog('opencode_zen_free', 'no OPENCODE_ZEN_KEY');
+    try {
+      const result = await httpJson('https://opencode.ai/zen/v1/models', auth(keys.OPENCODE_ZEN_KEY));
+      const ids = (result.body?.data || []).map((m) => m.id).filter(Boolean);
+      const freeIds = OPENCODE_ZEN_FREE_MODEL_IDS.filter((id) => ids.includes(id));
+      return freeCatalog(
+        'opencode_zen_free',
+        'https://opencode.ai/zen/v1/models',
+        freeIds.map((id) => ({ raw_id: id, display_name: id, availability: 'unknown' })),
+        { transport: 'opencode_cli_agent_session' }
+      );
+    } catch (error) {
+      return unavailableFreeCatalog('opencode_zen_free', `catalog request failed: ${String(error.message || error).slice(0, 120)}`);
+    }
+  })();
+
+  const [groqCatalog, openrouterCatalog, nvidiaCatalog, mistralCatalog, kiloCatalog, googleCatalog, cloudflareCatalog, zenCatalog] =
+    await Promise.all([groq, openrouter, nvidia, mistral, kilo, google, cloudflare, zen]);
+  return {
+    groq: groqCatalog,
+    openrouter: openrouterCatalog,
+    nvidia_nim: nvidiaCatalog,
+    mistral: mistralCatalog,
+    kilo: kiloCatalog,
+    google_ai_studio: googleCatalog,
+    cloudflare_workers_ai: cloudflareCatalog,
+    opencode_zen_free: zenCatalog
+  };
+}
+
+// Route targets for the free pool.  Completion routes carry harness: null and
+// route_kind: 'api_completion' (Stage A refuses them agent dispatches); OpenCode
+// Zen free models are real agent-session routes through the opencode harness.
+export function compileFreeRouteTargets(freeProviders) {
+  const routes = [];
+  const definitions = [
+    { catalog: 'groq', routePrefix: 'groq', provider: 'groq', pool: 'groq_free', transport: 'openai_compatible_http' },
+    { catalog: 'openrouter', routePrefix: 'openrouter', provider: 'openrouter', pool: 'openrouter_free', transport: 'openai_compatible_http' },
+    { catalog: 'nvidia_nim', routePrefix: 'nvidia', provider: 'nvidia', pool: 'nvidia_nim', transport: 'openai_compatible_http' },
+    { catalog: 'mistral', routePrefix: 'mistral', provider: 'mistral', pool: 'mistral_free', transport: 'openai_compatible_http' },
+    { catalog: 'kilo', routePrefix: 'kilo', provider: 'kilo', pool: 'kilo_free', transport: 'openai_compatible_http' },
+    { catalog: 'google_ai_studio', routePrefix: 'google', provider: 'google', pool: 'google_ai_studio', transport: 'google_generate_content' },
+    { catalog: 'cloudflare_workers_ai', routePrefix: 'cloudflare', provider: 'cloudflare', pool: 'cloudflare_workers_ai', transport: 'cloudflare_workers_ai' }
+  ];
+  for (const def of definitions) {
+    const catalog = freeProviders[def.catalog];
+    if (!catalog || catalog.count === 0) continue;
+    for (const m of catalog.models) {
+      const isAuto = m.auto_routing === true;
+      routes.push({
+        route_id: `${def.routePrefix}:${m.raw_id}`,
+        model_family: m.raw_id.replace(':free', ''),
+        logical_alias: m.raw_id,
+        resolved_runtime_model: m.raw_id,
+        provider: def.provider,
+        harness: null,
+        route_kind: 'api_completion',
+        free_tier: true,
+        spend_policy: 'FREE_RATE_LIMITED',
+        auto_routing: isAuto,
+        ...(m.may_train_on_prompts !== undefined ? { may_train_on_prompts: m.may_train_on_prompts } : {}),
+        provider_path: def.transport,
+        reasoning_effort: null,
+        quota_pool: def.pool,
+        // A free request's marginal cost is its share of the provider's
+        // rate-limit budget, not zero and not subscription quota.
+        expected_normalized_burn: 0.05,
+        quota_burn_model: 'free_rate_limited',
+        data_profile: def.pool,
+        discovery_source: catalog.source,
+        discovered_at: catalog.discovered_at,
+        resolved_at: catalog.discovered_at,
+        availability: m.availability || 'unknown',
+        ...(m.availability_evidence ? { availability_evidence: m.availability_evidence } : {}),
+        smoke_tested: m.availability === 'available',
+        routing_status: 'ROUTING_ELIGIBLE',
+        metadata_provenance: {
+          source: catalog.source,
+          confidence: 'high',
+          verified_at: catalog.discovered_at
+        }
+      });
+    }
+  }
+  const zenCatalog = freeProviders.opencode_zen_free;
+  if (zenCatalog && zenCatalog.count > 0) {
+    for (const m of zenCatalog.models) {
+      routes.push({
+        route_id: `zen-free:${m.raw_id}`,
+        model_family: m.raw_id,
+        logical_alias: m.raw_id,
+        resolved_runtime_model: `opencode/${m.raw_id}`,
+        provider: 'opencode-zen',
+        harness: 'opencode',
+        route_kind: 'agent_session',
+        free_tier: true,
+        spend_policy: 'FREE_RATE_LIMITED',
+        provider_path: 'opencode_cli',
+        reasoning_effort: null,
+        quota_pool: 'opencode_zen_free',
+        expected_normalized_burn: 0.05,
+        quota_burn_model: 'free_rate_limited',
+        data_profile: 'opencode_zen_free',
+        discovery_source: zenCatalog.source,
+        discovered_at: zenCatalog.discovered_at,
+        resolved_at: zenCatalog.discovered_at,
+        availability: m.availability || 'unknown',
+        ...(m.availability_evidence ? { availability_evidence: m.availability_evidence } : {}),
+        smoke_tested: m.availability === 'available',
+        routing_status: 'ROUTING_ELIGIBLE',
+        metadata_provenance: {
+          source: zenCatalog.source,
+          confidence: 'high',
+          verified_at: zenCatalog.discovered_at
+        }
+      });
+    }
+  }
+  return routes;
+}
+
+// Free pools ride the same quota-map pool abstraction; their state comes from
+// discovery probes rather than live subscription windows.
+export function seedFreePools(quotaMap, freeProviders) {
+  const poolFor = (name, catalog) => {
+    const models = catalog?.models || [];
+    const anyAuthFailed = models.length > 0 && models.every((m) => m.availability === 'auth_failed');
+    return {
+      harness: catalog?.transport === 'opencode_cli_agent_session' ? 'opencode' : null,
+      kind: 'free_rate_limited',
+      status: anyAuthFailed ? 'AUTH_FAILED' : 'HEALTHY',
+      scarcity_state: 'UNKNOWN',
+      windows: {},
+      source: 'provider_discovery',
+      model_count: models.length,
+      updated_at: new Date().toISOString()
+    };
+  };
+  const poolByCatalog = {
+    groq: 'groq_free',
+    openrouter: 'openrouter_free',
+    nvidia_nim: 'nvidia_nim',
+    mistral: 'mistral_free',
+    kilo: 'kilo_free',
+    google_ai_studio: 'google_ai_studio',
+    cloudflare_workers_ai: 'cloudflare_workers_ai',
+    opencode_zen_free: 'opencode_zen_free'
+  };
+  quotaMap.pools = quotaMap.pools || {};
+  for (const [catalogName, poolName] of Object.entries(poolByCatalog)) {
+    const catalog = freeProviders[catalogName];
+    if (!catalog || catalog.count === 0) continue;
+    quotaMap.pools[poolName] = poolFor(poolName, catalog);
+  }
+  return quotaMap;
+}
+
+// One tiny PUBLIC completion per provider against up to `maxPerProvider` models,
+// recording route-level availability back into the catalog.  429/403/401/404
+// probes burn nothing; 200 probes cost one minimal request.
+export async function probeFreeProviders({ keys = readFreeProviderKeys(), maxPerProvider = 4, catalogDir = CATALOG_DIR } = {}) {
+  const auth = (key) => ({ Authorization: `Bearer ${key}` });
+  const PUBLIC_PROBE_PROMPT = [{ role: 'user', content: 'Reply with exactly one word: pong' }];
+  const attempts = [
+    {
+      catalog: 'groq',
+      transport: 'openai_compatible_http',
+      key: keys.GROQ_API_KEY,
+      endpoint: (model) => `https://api.groq.com/openai/v1/chat/completions`,
+      body: (model) => ({ model, max_tokens: 16, messages: PUBLIC_PROBE_PROMPT })
+    },
+    {
+      catalog: 'openrouter',
+      transport: 'openai_compatible_http',
+      key: keys.OPENROUTER_API_KEY,
+      endpoint: () => 'https://openrouter.ai/api/v1/chat/completions',
+      body: (model) => ({ model, max_tokens: 16, messages: PUBLIC_PROBE_PROMPT })
+    },
+    {
+      catalog: 'nvidia_nim',
+      transport: 'openai_compatible_http',
+      key: keys.NVIDIA_API_KEY,
+      endpoint: () => 'https://integrate.api.nvidia.com/v1/chat/completions',
+      body: (model) => ({ model, max_tokens: 16, messages: PUBLIC_PROBE_PROMPT })
+    },
+    {
+      catalog: 'mistral',
+      transport: 'openai_compatible_http',
+      key: keys.MISTRAL_API_KEY,
+      endpoint: () => 'https://api.mistral.ai/v1/chat/completions',
+      body: (model) => ({ model, max_tokens: 16, messages: PUBLIC_PROBE_PROMPT })
+    },
+    {
+      catalog: 'kilo',
+      transport: 'openai_compatible_http',
+      key: keys.KILO_API_KEY,
+      endpoint: () => 'https://api.kilo.ai/api/gateway/chat/completions',
+      body: (model) => ({ model, max_tokens: 16, messages: PUBLIC_PROBE_PROMPT })
+    },
+    {
+      catalog: 'google_ai_studio',
+      transport: 'google_generate_content',
+      key: keys.GOOGLE_API_KEY,
+      endpoint: (model) => `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${keys.GOOGLE_API_KEY}`,
+      body: () => ({ contents: [{ parts: [{ text: 'Reply with exactly one word: pong' }] }] })
+    },
+    {
+      catalog: 'cloudflare_workers_ai',
+      transport: 'cloudflare_workers_ai',
+      key: keys.CLOUDFLARE_API_TOKEN,
+      account: keys.CLOUDFLARE_ACCOUNT_ID,
+      endpoint: (model) => `https://api.cloudflare.com/client/v4/accounts/${keys.CLOUDFLARE_ACCOUNT_ID}/ai/run/${model}`,
+      body: () => ({ messages: PUBLIC_PROBE_PROMPT, max_tokens: 16 })
+    }
+  ];
+  const summary = {};
+  for (const attempt of attempts) {
+    if (!attempt.key || (attempt.catalog === 'cloudflare_workers_ai' && !attempt.account)) {
+      summary[attempt.catalog] = { skipped: 'no credentials' };
+      continue;
+    }
+    const catalogPath = path.join(catalogDir, `${attempt.catalog}.json`);
+    if (!fs.existsSync(catalogPath)) {
+      summary[attempt.catalog] = { skipped: 'no catalog' };
+      continue;
+    }
+    const catalog = JSON.parse(fs.readFileSync(catalogPath, 'utf8'));
+    const models = (catalog.models || []).filter((m) => m.availability !== 'model_unavailable').slice(0, maxPerProvider);
+    const results = [];
+    for (const m of models) {
+      let status = 0;
+      let body = null;
+      let headers = {};
+      let error = null;
+      try {
+        const response = await fetch(attempt.endpoint(m.raw_id), {
+          method: 'POST',
+          headers: { ...auth(attempt.key), 'Content-Type': 'application/json' },
+          body: JSON.stringify(attempt.body(m.raw_id)),
+          signal: AbortSignal.timeout(30000)
+        });
+        status = response.status;
+        for (const header of ['x-ratelimit-limit-requests', 'x-ratelimit-remaining-requests']) {
+          const value = response.headers.get(header);
+          if (value !== null) headers[header] = value;
+        }
+        try {
+          body = await response.json();
+        } catch {
+          body = null;
+        }
+      } catch (requestError) {
+        error = String(requestError.message || requestError).slice(0, 120);
+      }
+      const availability = error ? null : availabilityFromHttp(status, body, headers);
+      if (availability) {
+        m.availability = availability;
+        m.availability_evidence = { http_status: status, checked_at: new Date().toISOString() };
+      } else if (error) {
+        m.availability_evidence = { error, checked_at: new Date().toISOString() };
+      }
+      results.push({ model: m.raw_id, http_status: status, availability: m.availability, ...(error ? { error } : {}) });
+    }
+    fs.writeFileSync(catalogPath, JSON.stringify(catalog, null, 2));
+    summary[attempt.catalog] = { probed: results.length, results };
+  }
+  return summary;
+}
+
 function brokenRoute(harness, catalog) {
   return {
     route_id: `${harness}:BROKEN`,
@@ -571,6 +1140,12 @@ function catalogAvailability(catalog, availability) {
 
 export function compileRouteTargets(catalogs) {
   const routes = [];
+
+  // Free / zero-marginal-cost provider routes (harness-null completion routes
+  // plus OpenCode Zen free agent sessions) ride the same RouteTarget model.
+  if (catalogs.free_providers) {
+    routes.push(...compileFreeRouteTargets(catalogs.free_providers));
+  }
 
   // Codex Routes
   if (catalogs.codex.broken) {
@@ -702,7 +1277,9 @@ export function compileRouteTargets(catalogs) {
       harness: 'opencode',
       provider_path: 'opencode_go_gateway',
       reasoning_effort: null,
-      quota_pool: 'opencode_go', // Single shared account pool
+      // The account is one subscription, but enforcement is per-model: routes
+      // carry their own allowance windows; this pool key is the account scope.
+      quota_pool: 'opencode_go',
       burn_profile: m.burn_profile,
       expected_normalized_burn: m.expected_normalized_burn,
       quota_burn_model: 'opencode_go_metered_allowance',
@@ -713,6 +1290,7 @@ export function compileRouteTargets(catalogs) {
       availability: catalogAvailability(catalogs.opencode_go, 'available'),
       smoke_tested: m.smoke_tested || false,
       routing_status: m.routing_status,
+      ...(m.allowance ? { allowance: m.allowance } : {}),
       metadata_provenance: m.metadata_provenance
     });
   }
@@ -782,11 +1360,23 @@ export function refreshAllCatalogs(options = {}) {
   const claude = discoverClaude(options.claude || {});
   const agy = discoverAntigravity(options.antigravity || {});
   const opencodeGo = discoverOpenCodeGo(options.opencode_go || {});
+  const freeProviders = options.free_providers || null;
 
   fs.writeFileSync(path.join(CATALOG_DIR, 'codex.json'), JSON.stringify(codex, null, 2));
   fs.writeFileSync(path.join(CATALOG_DIR, 'claude.json'), JSON.stringify(claude, null, 2));
   fs.writeFileSync(path.join(CATALOG_DIR, 'antigravity.json'), JSON.stringify(agy, null, 2));
   fs.writeFileSync(path.join(CATALOG_DIR, 'opencode-go.json'), JSON.stringify(opencodeGo, null, 2));
+
+  let freeCount = 0;
+  if (freeProviders) {
+    for (const [name, catalog] of Object.entries(freeProviders)) {
+      fs.writeFileSync(path.join(CATALOG_DIR, `${name}.json`), JSON.stringify(catalog, null, 2));
+      freeCount += catalog.count || 0;
+    }
+  } else if (options.skipFreeProviders !== true) {
+    // Free-catalog discovery is async; refresh keeps the previous snapshots and
+    // the free catalogs refresh through the async refreshFreeProviderCatalogs path.
+  }
 
   const routeTargets = compileRouteTargets({ codex, claude, antigravity: agy, opencode_go: opencodeGo });
   fs.writeFileSync(path.join(CATALOG_DIR, 'compiled-route-targets.json'), JSON.stringify(routeTargets, null, 2));
@@ -797,8 +1387,43 @@ export function refreshAllCatalogs(options = {}) {
     agyGeminiCount: (agy.gemini_native || []).length,
     agy3PCount: (agy.third_party || []).length,
     opencodeGoCount: (opencodeGo.models || []).length,
+    freeProvidersCount: freeCount,
     totalRouteTargets: routeTargets.length
   };
+}
+
+// Async companion that refreshes free-provider catalogs, recompiles the route
+// targets with them included, and seeds the free pools into the quota map.
+export async function refreshFreeProviderCatalogs({ quotaMapPath = path.join(FM_HOME, 'data/quota-pool-map.json') } = {}) {
+  const freeProviders = await discoverFreeProviders();
+  let freeCount = 0;
+  for (const [name, catalog] of Object.entries(freeProviders)) {
+    fs.writeFileSync(path.join(CATALOG_DIR, `${name}.json`), JSON.stringify(catalog, null, 2));
+    freeCount += catalog.count || 0;
+  }
+  // Recompile the full target list, reusing the just-written subscription catalogs.
+  const read = (name) => (fs.existsSync(path.join(CATALOG_DIR, `${name}.json`))
+    ? JSON.parse(fs.readFileSync(path.join(CATALOG_DIR, `${name}.json`), 'utf8'))
+    : { models: [] });
+  const routeTargets = compileRouteTargets({
+    codex: read('codex'),
+    claude: read('claude'),
+    antigravity: read('antigravity'),
+    opencode_go: read('opencode-go'),
+    free_providers: freeProviders
+  });
+  fs.writeFileSync(path.join(CATALOG_DIR, 'compiled-route-targets.json'), JSON.stringify(routeTargets, null, 2));
+
+  try {
+    if (fs.existsSync(quotaMapPath)) {
+      const quotaMap = JSON.parse(fs.readFileSync(quotaMapPath, 'utf8'));
+      seedFreePools(quotaMap, freeProviders);
+      fs.writeFileSync(quotaMapPath, JSON.stringify(quotaMap, null, 2));
+    }
+  } catch {
+    // Quota-map seeding is best-effort; routing still works with windowless pools.
+  }
+  return { freeModels: freeCount, totalRouteTargets: routeTargets.length };
 }
 
 // CLI handler
@@ -806,13 +1431,26 @@ if (process.argv[1] && process.argv[1].endsWith('fm-provider-discovery.mjs')) {
   const cmd = process.argv[2] || 'refresh';
   if (cmd === 'refresh') {
     const summary = refreshAllCatalogs();
-    console.log(`PROVIDER_DISCOVERY: refreshed all catalogs successfully.`);
-    console.log(`  Codex models: ${summary.codexCount}`);
-    console.log(`  Claude models: ${summary.claudeCount}`);
-    console.log(`  AGY Gemini Native: ${summary.agyGeminiCount}`);
-    console.log(`  AGY 3P Pool: ${summary.agy3PCount}`);
-    console.log(`  OpenCode Go models: ${summary.opencodeGoCount}`);
-    console.log(`  Total compiled RouteTargets: ${summary.totalRouteTargets}`);
+    refreshFreeProviderCatalogs().then((free) => {
+      console.log(`PROVIDER_DISCOVERY: refreshed all catalogs successfully.`);
+      console.log(`  Codex models: ${summary.codexCount}`);
+      console.log(`  Claude models: ${summary.claudeCount}`);
+      console.log(`  AGY Gemini Native: ${summary.agyGeminiCount}`);
+      console.log(`  AGY 3P Pool: ${summary.agy3PCount}`);
+      console.log(`  OpenCode Go models: ${summary.opencodeGoCount}`);
+      console.log(`  Free-provider models: ${free.freeModels}`);
+      console.log(`  Total compiled RouteTargets: ${free.totalRouteTargets}`);
+    }).catch((error) => {
+      console.log(`PROVIDER_DISCOVERY: free-provider refresh failed (${String(error.message || error).slice(0, 200)}); subscription catalogs kept.`);
+      console.log(`  Total compiled RouteTargets: ${summary.totalRouteTargets}`);
+    });
+  } else if (cmd === 'probe-free') {
+    probeFreeProviders().then((summary) => {
+      console.log(JSON.stringify(summary, null, 2));
+    }).catch((error) => {
+      console.error(`PROBE ERROR: ${String(error.message || error).slice(0, 300)}`);
+      process.exit(1);
+    });
   } else if (cmd === 'list') {
     const targetsPath = path.join(CATALOG_DIR, 'compiled-route-targets.json');
     if (!fs.existsSync(targetsPath)) refreshAllCatalogs();

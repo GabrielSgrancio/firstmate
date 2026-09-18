@@ -414,7 +414,7 @@ assert.equal(agyEarlyDecision.poolEconomics.claude_pro.actual_remaining > 25, tr
 assert.equal(agyEarlyDecision.selectedRoute.route_id, 'agy-3p:claude-sonnet-4-6');
 assert.equal(agyEarlyDecision.selectedRouteEconomics.resource_pool, 'antigravity_3p');
 assert.equal(agyEarlyDecision.selectedRouteEconomics.shared_meter, false);
-assert.deepEqual(Object.keys(agyEarlyDecision.poolEconomics).filter((name) => name.startsWith('opencode_go')), ['opencode_go']);
+assert.deepEqual(Object.keys(agyEarlyDecision.poolEconomics).filter((name) => name.startsWith('opencode_go')).sort(), ['opencode_go', 'opencode_go_qwen38_flash'].sort());
 
 const opencodeCandidate = stagedDecision.allCandidates.find((candidate) => candidate.route_id === 'opencode:qwen3.7-max');
 assert.ok(opencodeCandidate, 'OpenCode Go remains in the economic candidate set');

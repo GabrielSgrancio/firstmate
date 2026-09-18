@@ -8,6 +8,7 @@ import {
   TASK_CLASSES,
   taskClassForRole,
   explorationPolicy,
+  EXPLORATION_DATA_CLASSES as EXPLORATION_ASSIGNMENT_DATA_CLASSES,
   getCapabilityRecord,
   normalizeLearnedRouting,
   promotionCriteria,
@@ -21,6 +22,7 @@ import {
   buildRouteEconomics,
   calculateObservedQuotaDelta,
   collectRoutingObservations,
+  routeAllowanceState,
   selectEconomicRoute
 } from './fm-routing-economics.mjs';
 import {
@@ -259,8 +261,10 @@ export function validateConfigs() {
 // dataClass classifies the actual payload being sent, never the repository or task it came from -
 // a code-only task in a personal repo is PRIVATE_CODE (or PUBLIC/SANITIZED if genuinely generic),
 // not PERSONAL_SENSITIVE by default. See docs/router-v2.md "Data classification" for the full rule.
-export function evaluateDataGate(dataClass, targetProfileName, routeContext = {}) {
-  const { dataPolicy, privacyMetadata } = loadConfigs();
+// `preloaded` lets hot per-route callers (Stage A over the whole candidate pool) pass the
+// loadConfigs() result they already hold instead of re-reading every config file per route.
+export function evaluateDataGate(dataClass, targetProfileName, routeContext = {}, preloaded = null) {
+  const { dataPolicy, privacyMetadata } = preloaded || loadConfigs();
   const dc = dataPolicy.data_classes[dataClass];
   if (!dc) throw new Error(`Unknown data class: ${dataClass}`);
 
@@ -355,16 +359,44 @@ export function seedPriorAdmission({ route, role, critical = false, priors = nul
   return { admitted: true, reason: 'seed prior recommends this role', prior };
 }
 
+// Explicit route-level availability states (per-provider catalogs probe these
+// per model; one dead model never disables an otherwise usable provider).
+// AVAILABLE and RATE_LIMITED (a nonzero limit, priced through scarcity) pass;
+// every other state is a hard blocker at Stage A.
+export const ROUTE_AVAILABILITY_STATES = Object.freeze([
+  'AVAILABLE',
+  'RATE_LIMITED',
+  'RATE_LIMITED_ZERO',
+  'QUOTA_EXHAUSTED',
+  'TIER_BLOCKED',
+  'AUTH_FAILED',
+  'MODEL_UNAVAILABLE',
+  'STALE',
+  'UNKNOWN'
+]);
 const AVAILABILITY_STATE = Object.freeze({
   available: 'AVAILABLE',
   // The catalog could not confirm availability; Stage A's live pool status still gates.
   unknown: 'AVAILABLE',
   credit_gated: 'AVAILABLE',
+  // Catalog record of a probe/capacity outcome; UNKNOWN passes and is priced.
+  rate_limited: 'RATE_LIMITED',
+  rate_limited_zero: 'RATE_LIMITED_ZERO',
+  quota_exhausted: 'QUOTA_EXHAUSTED',
+  tier_blocked: 'TIER_BLOCKED',
+  auth_failed: 'AUTH_FAILED',
+  model_unavailable: 'MODEL_UNAVAILABLE',
   stale_catalog: 'STALE',
   stale: 'STALE',
   auth_required: 'AUTH_REQUIRED'
 });
-const SPEND_POLICIES = new Set(['BASELINE_SUBSCRIPTION', 'CREDIT_GATED', 'PAYG', 'FORBIDDEN']);
+// States that pass candidate generation; everything else is a hard blocker.
+const AVAILABILITY_PASS_STATES = new Set(['AVAILABLE', 'RATE_LIMITED']);
+// Zero-marginal-cost free routes are never PAYG: they carry an explicit
+// FREE_RATE_LIMITED spend policy whose only cost is the provider's rate limit.
+// PAYG remains a hard blocker everywhere (zero-PAYG constraint).
+const SPEND_POLICIES = new Set(['BASELINE_SUBSCRIPTION', 'CREDIT_GATED', 'PAYG', 'FREE_RATE_LIMITED', 'FORBIDDEN']);
+const SPEND_PASS_POLICIES = new Set(['BASELINE_SUBSCRIPTION', 'FREE_RATE_LIMITED']);
 
 // Independent RouteTarget state dimensions.  None of them reads lifecycle
 // routing_status stages or real_n; only hard facts can produce a hard blocker.
@@ -373,16 +405,19 @@ const SPEND_POLICIES = new Set(['BASELINE_SUBSCRIPTION', 'CREDIT_GATED', 'PAYG',
 export function routeStateDimensions(route, { routeValidation = null, taskClass = null } = {}) {
   const broken = route?.broken === true || route?.routing_status === 'BROKEN';
   const availability = broken ? 'UNAVAILABLE'
-    : (route?.availability === undefined ? 'AVAILABLE' : (AVAILABILITY_STATE[route.availability] || 'UNAVAILABLE'));
+    : (route?.availability === undefined ? 'AVAILABLE' : (AVAILABILITY_STATE[route.availability] || 'MODEL_UNAVAILABLE'));
   let spendPolicy;
   if (SPEND_POLICIES.has(route?.spend_policy)) spendPolicy = route.spend_policy;
   else if (route?.availability === 'credit_gated' || route?.routing_status === 'CREDIT_GATED' || /_credits$/.test(route?.quota_pool || '')) spendPolicy = 'CREDIT_GATED';
   else if (RESOURCE_POOLS.includes(routePoolName(route))) spendPolicy = 'BASELINE_SUBSCRIPTION';
+  else if (route?.spend_policy === 'FREE_RATE_LIMITED' || (route?.route_kind === 'api_completion' && route?.free_tier === true)) spendPolicy = 'FREE_RATE_LIMITED';
   else spendPolicy = 'FORBIDDEN';
   const summary = taskClass ? routeValidationSummary(routeValidation, route, taskClass) : { validation: 'UNKNOWN', capabilities: {}, operational_health: 'UNKNOWN' };
   const hardBlockers = [];
-  if (availability !== 'AVAILABLE') hardBlockers.push(`availability ${availability}${route?.availability ? ` (${route.availability})` : ''}`);
-  if (spendPolicy !== 'BASELINE_SUBSCRIPTION') hardBlockers.push(`spend policy ${spendPolicy}`);
+  if (availability !== 'AVAILABLE' && !AVAILABILITY_PASS_STATES.has(availability)) {
+    hardBlockers.push(`availability ${availability}${route?.availability ? ` (${route.availability})` : ''}`);
+  }
+  if (!SPEND_PASS_POLICIES.has(spendPolicy)) hardBlockers.push(`spend policy ${spendPolicy}`);
   if (route?.routing_status === 'MANUAL_ONLY') hardBlockers.push('captain policy MANUAL_ONLY');
   if (summary.validation === 'FAILED') {
     const failed = Object.entries(summary.capabilities).filter(([, status]) => status === 'FAILED').map(([name]) => name);
@@ -415,6 +450,7 @@ export function queryCapabilityCandidates({
   compiledRoutes = [],
   modelIntelligence = null,
   routeValidation = null,
+  configs = null,
   now = new Date()
 } = {}) {
   const selectedTaskClass = taskClass || taskClassForRole(role);
@@ -450,7 +486,8 @@ export function queryCapabilityCandidates({
       retryTolerant,
       routeProfile: route.data_profile,
       resolvedRuntimeModel: route.resolved_runtime_model,
-      evaluateDataGate
+      // Reuse the caller's already-loaded policy config in the per-route gate.
+      evaluateDataGate: (dataClassForGate, profile, context) => evaluateDataGate(dataClassForGate, profile, context, configs)
     });
     let candidateBasis;
     if (intelligenceMode) candidateBasis = taskFit.usable ? 'model_intelligence' : 'exploration';
@@ -551,7 +588,10 @@ export function resolveLiveQuotaPools({ quotaOverrides = null, useLiveAxi = true
         }
       }
     } catch (err) {
-      for (const k of Object.keys(pools)) {
+      // Only pools the live adapter owns lose their state on failure; probe-based
+      // pools registered by provider discovery keep their recorded auth/availability.
+      for (const k of ['codex_plus', 'claude_pro', 'antigravity_gemini', 'antigravity_3p']) {
+        if (!pools[k]) continue;
         pools[k].scarcity_state = 'UNKNOWN';
         pools[k].status = 'UNKNOWN';
         setPoolWindowsFresh(pools[k], false);
@@ -664,6 +704,10 @@ function routePoolName(route) {
 }
 
 function effortFitScore(requiredEffort, candidateEffort) {
+  // A route with no reasoning-effort knob cannot mismatch a requested effort;
+  // its capability is priced separately by quality evidence.  Only explicit
+  // tiers can satisfy or violate an explicit request.
+  if (candidateEffort === null || candidateEffort === undefined) return 1;
   if (!candidateEffort) return 0;
   if (candidateEffort === requiredEffort) return 1;
   if (requiredEffort === 'high' && ['low', 'minimal'].includes(candidateEffort)) return -1;
@@ -778,7 +822,11 @@ export function stageAHardRequirements({
   allowChallengers = false,
   excludeRoutes = [],
   requiredEffort = null,
-  effortWasExplicit = false
+  effortWasExplicit = false,
+  requireSpawnable = false,
+  routeObservations = null,
+  configs = null,
+  now = new Date()
 } = {}) {
   const survivors = [];
   const rejected = [];
@@ -788,6 +836,12 @@ export function stageAHardRequirements({
     const reject = (reason) => rejected.push({ route_id: routeId, reason, stage: 'A_hard_requirements' });
     if (excludeRoutes.includes(routeId)) {
       reject('Excluded by fallback re-routing policy');
+      continue;
+    }
+    // Agent dispatch needs a harness that can host a worker session; completion-only
+    // routes stay visible to routing/eval but never receive agent dispatches.
+    if (requireSpawnable && (route.route_kind === 'api_completion' || !route.harness)) {
+      reject('Route is completion-only and cannot host an agent session');
       continue;
     }
     // Captain policy and spend facts, re-checked here for callers that build
@@ -807,10 +861,36 @@ export function stageAHardRequirements({
       continue;
     }
 
-    const gate = evaluateDataGate(dataClass, route.data_profile, { resolvedRuntimeModel: route.resolved_runtime_model });
+    let gate;
+    try {
+      gate = evaluateDataGate(dataClass, route.data_profile, { resolvedRuntimeModel: route.resolved_runtime_model }, configs);
+    } catch (error) {
+      // An unregistered or misconfigured profile removes only its own routes;
+      // one bad profile must not crash the whole dispatch.
+      reject(`Data Policy unavailable: ${String(error.message).slice(0, 200)}`);
+      continue;
+    }
     if (!gate.allowed) {
       reject(`Data Policy Rejected: ${gate.reason}`);
       continue;
+    }
+
+    // Per-model capacity: a route whose own allowance windows are exhausted or
+    // hard-zero is out regardless of the shared pool's aggregate state.
+    const allowance = routeAllowanceState(
+      route,
+      routeObservations?.byRoute?.[routeId] || null,
+      now instanceof Date ? now.getTime() : new Date(now).getTime()
+    );
+    if (allowance?.observed) {
+      if (allowance.scarcity_state === 'EXHAUSTED') {
+        reject('Route allowance exhausted (per-model window)');
+        continue;
+      }
+      if (allowance.scarcity_state === 'CRITICAL' && route.availability === 'rate_limited_zero') {
+        reject('Route allowance critical with zero rate limit');
+        continue;
+      }
     }
 
     const poolName = routePoolName(route);
@@ -927,12 +1007,15 @@ export function scoreAndSelectRoute({
   useLiveAxi = true,
   qualityFloor = null,
   telemetryRecords = null,
+  requireSpawnable = false,
+  explorationRandom = null,
   now = new Date()
 }) {
   if (!dataClass || dataClass === 'UNKNOWN') {
     throw new Error(`dataClass is required and must not be empty or UNKNOWN (fail-closed policy)`);
   }
-  const { registry, policy, priors, learned, compiledRoutes, modelIntelligence, routeValidation } = loadConfigs();
+  const configs = loadConfigs();
+  const { registry, policy, priors, learned, compiledRoutes, modelIntelligence, routeValidation } = configs;
   if (!registry.canonical_roles.includes(role)) {
     throw new Error(`Cannot route unknown role: "${role}"`);
   }
@@ -949,6 +1032,7 @@ export function scoreAndSelectRoute({
     compiledRoutes,
     modelIntelligence,
     routeValidation,
+    configs,
     now
   });
   const selectedTaskClass = capabilityQuery.taskClass;
@@ -970,7 +1054,11 @@ export function scoreAndSelectRoute({
     allowChallengers,
     excludeRoutes,
     requiredEffort,
-    effortWasExplicit: targetEffort !== null
+    effortWasExplicit: targetEffort !== null,
+    requireSpawnable,
+    routeObservations: quotaEconomics,
+    configs,
+    now
   });
   const candidateGenerationRejections = capabilityQuery.rejected.map((entry) => ({ ...entry, stage: 'candidate_generation' }));
   const stageB = stageBQualityGate({
@@ -1019,7 +1107,34 @@ export function scoreAndSelectRoute({
     };
   });
   const selected = selectEconomicRoute(scored);
-  const winner = selected.winner;
+  let winner = selected.winner;
+  let explorationDispatch = null;
+
+  // Bounded exploration for low-risk work: among Stage B survivors that are
+  // exploration-eligible but lost to the economic winner, occasionally send one
+  // real task so outcomes accumulate and uncertainty becomes evidence.  Never
+  // for critical or high-risk work; rate is the route's own exploration policy
+  // cap (bootstrap 0.18 / steady 0.05).
+  const highRiskTask = isHighRiskTaskClass(selectedTaskClass, critical);
+  const explorationCandidate = selected.ranked.find((entry) =>
+    entry !== winner &&
+    entry.exploration?.eligible === true &&
+    entry.exploration.rate > 0
+  );
+  if (explorationCandidate && retryTolerant && !critical && !highRiskTask &&
+      EXPLORATION_ASSIGNMENT_DATA_CLASSES.has(dataClass)) {
+    const random = explorationRandom === null ? Math.random() : explorationRandom;
+    if (Number.isFinite(random) && random < explorationCandidate.exploration.rate) {
+      winner = explorationCandidate;
+      explorationDispatch = {
+        assigned: true,
+        rate: explorationCandidate.exploration.rate,
+        phase: explorationCandidate.exploration.phase,
+        economic_winner_route_id: selected.winner.route.route_id,
+        economic_winner_score: selected.winner.finalScore
+      };
+    }
+  }
 
   return {
     role,
@@ -1035,6 +1150,7 @@ export function scoreAndSelectRoute({
     scarcityState: winner.scarcityState,
     finalScore: winner.finalScore,
     arbitrageReason: winner.arbitrageNote,
+    explorationDispatch,
     candidateRoutesCount: candidateRoutes.length,
     viableCandidatesCount: stageA.survivors.length,
     sufficientCandidatesCount: stageB.survivors.length,
@@ -1061,6 +1177,7 @@ export function scoreAndSelectRoute({
       stageC: {
         input_count: stageB.survivors.length,
         selected_route_id: winner.route.route_id,
+        exploration_dispatch: explorationDispatch,
         ranking: selected.ranked.map((entry) => ({
           route_id: entry.route.route_id,
           economic_score: entry.economics.economic_score,
@@ -1583,6 +1700,7 @@ export function dispatchThroughHerdr({
       retryTolerant,
       excludeRoutes: effectiveExcludes,
       quotaOverrides,
+      requireSpawnable: true,
       useLiveAxi
     });
   }
@@ -1595,7 +1713,7 @@ export function dispatchThroughHerdr({
   const effectiveProjectDir = projectDir || currentFmHome();
   const contextBroker = createContextBroker({
     homeDir: currentFmHome(),
-    routeSelector: (params) => scoreAndSelectRoute(params),
+    routeSelector: (params) => scoreAndSelectRoute({ ...params, requireSpawnable: true }),
     dataGate: evaluateDataGate
   });
   const contextPack = contextBroker.requestContext({

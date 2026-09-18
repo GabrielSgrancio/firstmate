@@ -3,6 +3,7 @@ import { ROUTE_EXCUSED_ATTRIBUTIONS, normalizeAttribution } from './fm-model-int
 
 const WINDOW_HORIZONS_HOURS = {
   rolling: 5,
+  daily: 24,
   weekly: 7 * 24,
   monthly: 30 * 24
 };
@@ -62,7 +63,7 @@ function windowKind(name) {
   if (key.includes('month')) return 'monthly';
   if (key.includes('week') || key.includes('seven_day') || key.includes('7d')) return 'weekly';
   if (key.includes('five_hour') || key.includes('rolling') || key.includes('5h')) return 'rolling';
-  if (key.includes('day')) return 'weekly';
+  if (key.includes('day')) return 'daily';
   return null;
 }
 
@@ -298,6 +299,7 @@ export function collectRoutingObservations(executions = [], routes = [], now = n
 function readPoolWindows(pool, nowMs) {
   const result = {
     rolling: { percent_remaining: null, reset_at: null, hours_until_reset: null },
+    daily: { percent_remaining: null, reset_at: null, hours_until_reset: null },
     weekly: { percent_remaining: null, reset_at: null, hours_until_reset: null },
     monthly: { percent_remaining: null, reset_at: null, hours_until_reset: null }
   };
@@ -412,7 +414,10 @@ function poolState(pool, pacing) {
 export function buildPoolEconomics({ pools = {}, observations = { byPool: {}, activeByPool: {} }, now = new Date() } = {}) {
   const nowMs = now instanceof Date ? now.getTime() : new Date(now).getTime();
   const output = {};
-  for (const name of RESOURCE_POOLS) {
+  // Subscription pools are the fixed baseline set; provider catalogs may register
+  // additional pools (free/rate-limited APIs) that ride the same economics.
+  const poolNames = [...RESOURCE_POOLS, ...Object.keys(pools).filter((name) => !RESOURCE_POOLS.includes(name))];
+  for (const name of poolNames) {
     const pool = pools[name] || {};
     const canonical = canonicalPoolName(name, pools);
     const poolObservation = observations.byPool?.[canonical] || aggregateForRoute();
@@ -523,6 +528,79 @@ function defaultTokenUsage(route) {
   return 16000;
 }
 
+// Providers that enforce limits per model (OpenCode Go publishes per-model
+// windows; free rate-limited APIs publish per-model rpm/rpd) expose capacity at
+// route granularity, not as one scalar provider pool.  A route carrying an
+// `allowance` block gets its own windows computed from real telemetry attempt
+// counts against the published limits; the aggregate pool number stays a
+// reporting signal and a fallback only for routes with no allowance.
+// allowance shape: {
+//   capacity_model: 'per_route_windows',
+//   windows: { rolling: {limit_requests} | {limit_percent, share_of: 'monthly'}, daily|weekly|monthly: {limit_requests} },
+//   requests_per_minute?: number,
+//   source, retrieved_at
+// }
+export const ALLOWANCE_WINDOW_KINDS = ['rolling', 'daily', 'weekly', 'monthly'];
+
+function windowHours(kind) {
+  return WINDOW_HORIZONS_HOURS[kind] ?? null;
+}
+
+function attemptsInWindow(timestamps, nowMs, kind) {
+  const horizonMs = windowHours(kind) * 3600000;
+  if (!Number.isFinite(horizonMs)) return 0;
+  return timestamps.filter((t) => finite(t) && nowMs - t <= horizonMs).length;
+}
+
+// Percent remaining per window for a route with a published allowance.  Request
+// counts come from this home's own telemetry (completed attempts inside the
+// window); until a route has observations its windows report UNKNOWN headroom
+// and the caller falls back to pool-level state.
+export function routeAllowanceWindows(route, routeObservation, nowMs = Date.now()) {
+  const allowance = route?.allowance;
+  if (!allowance || allowance.capacity_model !== 'per_route_windows') return null;
+  const timestamps = routeObservation?.timestamps || [];
+  const monthly = allowance.windows?.monthly?.limit_requests ?? null;
+  const windows = {};
+  for (const kind of ALLOWANCE_WINDOW_KINDS) {
+    const spec = allowance.windows?.[kind];
+    if (!spec) continue;
+    let limit = null;
+    let basis = null;
+    if (finite(spec.limit_requests)) {
+      limit = spec.limit_requests;
+      basis = 'published_requests';
+    } else if (finite(spec.limit_percent) && finite(monthly)) {
+      limit = monthly * (spec.limit_percent / 100);
+      basis = 'published_percent_of_monthly';
+    }
+    if (!finite(limit) || limit <= 0) continue;
+    const used = attemptsInWindow(timestamps, nowMs, kind);
+    windows[kind] = {
+      percent_remaining: clamp(100 * (1 - used / limit), 0, 100),
+      limit_requests: limit,
+      used_requests: used,
+      basis,
+      hours_until_reset: null
+    };
+  }
+  if (!Object.keys(windows).length) return null;
+  return windows;
+}
+
+export function routeAllowanceState(route, routeObservation, nowMs = Date.now()) {
+  const windows = routeAllowanceWindows(route, routeObservation, nowMs);
+  if (!windows) return null;
+  const values = Object.values(windows).map((w) => w.percent_remaining).filter(finite);
+  const remaining = values.length ? Math.min(...values) : null;
+  return {
+    windows,
+    actual_remaining: remaining,
+    scarcity_state: remaining === null ? 'UNKNOWN' : scarcityForRemaining(remaining),
+    observed: (routeObservation?.attempts || 0) > 0
+  };
+}
+
 export function buildRouteEconomics({
   route,
   capability = null,
@@ -538,6 +616,26 @@ export function buildRouteEconomics({
   const pool = poolEconomics[poolName] || poolEconomics[route?.quota_pool] || {};
   const routeObservation = observations.byRoute?.[route?.route_id] || aggregateForRoute();
   const poolObservation = observations.byPool?.[poolName] || aggregateForRoute();
+  const nowMs = now instanceof Date ? now.getTime() : new Date(now).getTime();
+  // Per-route allowance windows, when the provider enforces per-model limits,
+  // replace the shared pool windows for every headroom/scarcity term; the pool
+  // number is only a fallback for routes without their own capacity evidence.
+  const allowanceState = routeAllowanceState(route, routeObservation, nowMs);
+  const effectivePool = allowanceState?.observed
+    ? {
+      ...pool,
+      windows: Object.fromEntries(Object.entries(allowanceState.windows).map(([kind, w]) => [kind, {
+        percent_remaining: w.percent_remaining,
+        reset_at: null,
+        hours_until_reset: w.hours_until_reset
+      }])),
+      actual_remaining: allowanceState.actual_remaining,
+      scarcity_state: allowanceState.scarcity_state,
+      _windows_fresh: true,
+      capacity_evidence: 'route_allowance'
+    }
+    : { ...pool, capacity_evidence: allowanceState ? 'pool_fallback_no_route_observations' : 'pool' };
+  const poolForTerms = effectivePool;
   const probability = finite(successProbability)
     ? clamp(successProbability, 0.01, 0.999)
     : (finite(capability?.posterior_mean) ? clamp(capability.posterior_mean, 0.01, 0.999) : 0.5);
@@ -555,25 +653,38 @@ export function buildRouteEconomics({
   const routeHealth = finite(routeHealthScore)
     ? Math.min(pool.route_health ?? 0.5, routeHealthScore)
     : (pool.route_health ?? 0.5);
-  const headroom = pool.actual_remaining;
-  const surplus = pool.surplus;
-  const pressure = pool.pressure;
+  // Headroom, pacing, and reset terms read the route's own allowance windows
+  // when present; operational terms (health, concurrency, retry) stay pool-level.
+  const allowancePacing = allowanceState?.observed
+    ? computeBudgetPacing({
+      windows: effectivePool.windows,
+      recentBurnVelocity: recentVelocity(routeObservation, nowMs),
+      now
+    })
+    : null;
+  const headroom = allowancePacing ? allowancePacing.actual_remaining : pool.actual_remaining;
+  const surplus = allowancePacing ? allowancePacing.surplus : pool.surplus;
+  const pressure = allowancePacing ? allowancePacing.pressure : pool.pressure;
   const concurrencyRatio = finite(pool.max_concurrency) && pool.max_concurrency > 0
     ? clamp(pool.current_concurrency / pool.max_concurrency, 0, 2)
     : 0;
   const cost = burn.expected_quota_burn_per_attempt / probability;
   const pacingScore = finite(surplus) ? clamp(surplus / 100 - Math.max(0, pressure - 1) * 0.5, -1, 1) : 0;
-  const exhaustionScore = finite(pool.projected_exhaustion_hours)
-    ? clamp(pool.projected_exhaustion_hours / 168, 0, 1)
+  const exhaustionScore = finite(allowancePacing?.projected_exhaustion_hours ?? pool.projected_exhaustion_hours)
+    ? clamp((allowancePacing?.projected_exhaustion_hours ?? pool.projected_exhaustion_hours) / 168, 0, 1)
     : 0.5;
-  const resetScore = finite(pool.reset_horizon_hours) ? clamp(1 - pool.reset_horizon_hours / (30 * 24), 0, 1) : 0.5;
-  const unusedScore = finite(pool.expected_unused_quota_at_reset) ? clamp(pool.expected_unused_quota_at_reset / 100, 0, 1) : 0;
+  const resetScore = finite(allowancePacing?.reset_horizon_hours ?? pool.reset_horizon_hours)
+    ? clamp(1 - (allowancePacing?.reset_horizon_hours ?? pool.reset_horizon_hours) / (30 * 24), 0, 1)
+    : 0.5;
+  const unusedScore = finite(allowancePacing?.expected_unused_quota_at_reset ?? pool.expected_unused_quota_at_reset)
+    ? clamp((allowancePacing?.expected_unused_quota_at_reset ?? pool.expected_unused_quota_at_reset) / 100, 0, 1)
+    : 0;
   const latencyScore = finite(latency) ? 1 / (1 + latency / 10) : 0.5;
   const concurrencyScore = 1 - clamp(concurrencyRatio, 0, 1);
   const retryScore = 1 - clamp(retryProbability, 0, 1);
   const explorationValue = candidateBasis === 'exploration' ? 0.06 : 0;
-  const controlledConsumption = pool.scarcity_state === 'USE_BEFORE_RESET'
-    ? clamp((pool.expected_unused_quota_at_reset || 0) / 100, 0, 0.15)
+  const controlledConsumption = (allowancePacing ? allowanceState.scarcity_state : pool.scarcity_state) === 'USE_BEFORE_RESET'
+    ? clamp((allowancePacing?.expected_unused_quota_at_reset ?? pool.expected_unused_quota_at_reset ?? 0) / 100, 0, 0.15)
     : 0;
   const economicScore = Number((
     -1.4 * Math.min(cost / 10, 2) +
@@ -609,20 +720,38 @@ export function buildRouteEconomics({
       ? null
       : Number(burn.observed_normalized_quota_consumption.toFixed(6)),
     expected_successful_quota_burn: Number(cost.toFixed(6)),
-    rolling_headroom_percent: pool.rolling_headroom_percent ?? null,
-    weekly_headroom_percent: pool.weekly_headroom_percent ?? null,
-    monthly_headroom_percent: pool.monthly_headroom_percent ?? null,
+    capacity_evidence: effectivePool.capacity_evidence,
+    allowance_windows: allowanceState?.observed
+      ? Object.fromEntries(Object.entries(allowanceState.windows).map(([kind, w]) => [kind, {
+        percent_remaining: w.percent_remaining,
+        limit_requests: w.limit_requests,
+        used_requests: w.used_requests,
+        basis: w.basis
+      }]))
+      : null,
+    rolling_headroom_percent: allowancePacing
+      ? (allowancePacing.per_window?.rolling?.actual_remaining ?? null)
+      : (pool.rolling_headroom_percent ?? null),
+    daily_headroom_percent: allowancePacing
+      ? (allowancePacing.per_window?.daily?.actual_remaining ?? null)
+      : (pool.daily_headroom_percent ?? null),
+    weekly_headroom_percent: allowancePacing
+      ? (allowancePacing.per_window?.weekly?.actual_remaining ?? null)
+      : (pool.weekly_headroom_percent ?? null),
+    monthly_headroom_percent: allowancePacing
+      ? (allowancePacing.per_window?.monthly?.actual_remaining ?? null)
+      : (pool.monthly_headroom_percent ?? null),
     rolling_reset_at: pool.rolling_reset_at ?? null,
     weekly_reset_at: pool.weekly_reset_at ?? null,
     monthly_reset_at: pool.monthly_reset_at ?? null,
     actual_remaining: headroom,
-    target_remaining: pool.target_remaining ?? null,
+    target_remaining: allowancePacing ? allowancePacing.target_remaining : (pool.target_remaining ?? null),
     surplus,
     pressure,
-    recent_burn_velocity: pool.recent_burn_velocity ?? 0,
-    projected_exhaustion_hours: pool.projected_exhaustion_hours ?? null,
-    reset_horizon_hours: pool.reset_horizon_hours ?? null,
-    expected_unused_quota_at_reset: pool.expected_unused_quota_at_reset ?? null,
+    recent_burn_velocity: allowancePacing ? allowancePacing.recent_burn_velocity : (pool.recent_burn_velocity ?? 0),
+    projected_exhaustion_hours: allowancePacing ? allowancePacing.projected_exhaustion_hours : (pool.projected_exhaustion_hours ?? null),
+    reset_horizon_hours: allowancePacing ? allowancePacing.reset_horizon_hours : (pool.reset_horizon_hours ?? null),
+    expected_unused_quota_at_reset: allowancePacing ? allowancePacing.expected_unused_quota_at_reset : (pool.expected_unused_quota_at_reset ?? null),
     effort_fit_score: effortFitScore,
     current_concurrency: pool.current_concurrency ?? 0,
     max_concurrency: pool.max_concurrency ?? null,
@@ -633,7 +762,7 @@ export function buildRouteEconomics({
     route_health: routeHealth,
     operational_health: operationalHealth || 'UNKNOWN',
     retry_observations: routeObservation.reliabilityAttempts,
-    scarcity_state: pool.scarcity_state || 'UNKNOWN',
+    scarcity_state: (allowancePacing ? allowanceState.scarcity_state : pool.scarcity_state) || 'UNKNOWN',
     quota_evidence: finite(headroom) ? 'observed' : 'unknown_low_confidence',
     economic_score: economicScore,
     burn_observation_count: burn.observation_count,

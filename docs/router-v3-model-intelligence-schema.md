@@ -19,13 +19,17 @@ A provider refresh never writes Model Intelligence, route validation, capability
 
 | Dimension | Values | Source |
 |---|---|---|
-| `availability` | `AVAILABLE`, `UNAVAILABLE`, `STALE`, `AUTH_REQUIRED` | catalog `availability` and `broken` |
-| `spend_policy` | `BASELINE_SUBSCRIPTION`, `CREDIT_GATED`, `PAYG`, `FORBIDDEN` | explicit `spend_policy`, credit-gated markers, else one of the five subscription pools; an unrecognized pool is `FORBIDDEN` |
+| `availability` | `AVAILABLE`, `RATE_LIMITED`, `RATE_LIMITED_ZERO`, `QUOTA_EXHAUSTED`, `TIER_BLOCKED`, `AUTH_FAILED`, `MODEL_UNAVAILABLE`, `STALE`, `UNAVAILABLE`, `AUTH_REQUIRED` | catalog `availability`, per-model availability probes, and `broken` |
+| `spend_policy` | `BASELINE_SUBSCRIPTION`, `CREDIT_GATED`, `PAYG`, `FREE_RATE_LIMITED`, `FORBIDDEN` | explicit `spend_policy`, credit-gated markers, else one of the five subscription pools; a free route (`route_kind: api_completion` with `free_tier: true`) is `FREE_RATE_LIMITED`; an unrecognized pool is `FORBIDDEN` |
 | `validation` | `UNKNOWN`, `VALIDATED`, `WARNING`, `FAILED` | route validation, worst-of over the capabilities the task class exercises |
 | `operational_health` | `HEALTHY`, `DEGRADED`, `UNHEALTHY`, `UNKNOWN` | route validation `operational_health` |
 
-Candidate generation rejects a route only for a hard blocker: availability other than `AVAILABLE`, spend policy other than `BASELINE_SUBSCRIPTION`, `MANUAL_ONLY` captain policy, validation `FAILED` for a capability this task class needs, or `UNHEALTHY` health.
+Candidate generation rejects a route only for a hard blocker: availability outside `AVAILABLE`/`RATE_LIMITED`, spend policy outside `BASELINE_SUBSCRIPTION`/`FREE_RATE_LIMITED`, `MANUAL_ONLY` captain policy, validation `FAILED` for a capability this task class needs, or `UNHEALTHY` health.
+`RATE_LIMITED` means a nonzero live rate limit: it passes and its remaining budget prices the route through scarcity; `RATE_LIMITED_ZERO` (effective limit 0), quota exhaustion, tier blocks, auth failures, and unavailable models are hard blockers, so one dead model never disables an otherwise usable provider.
+PAYG spend stays blocked everywhere (zero-PAYG constraint).
 Data policy and live pool status remain Stage A hard requirements.
+Routes carrying an `allowance` block (`capacity_model: per_route_windows`, per-model published request/percentage windows with `source` and `retrieved_at`) get route-level capacity windows computed from telemetry attempt counts inside each window; Stage A refuses a route whose own windows are exhausted even while its shared pool is abundant, and Stage C prices those windows ahead of the pool fallback.
+Agent dispatch (`requireSpawnable`) additionally refuses `route_kind: api_completion` and harness-less routes: completion routes are visible to routing, evaluation, and capacity accounting, but only a harness that can host a worker session may receive an agent dispatch.
 Lifecycle `routing_status` stages (`BENCHMARK_ONLY` through `ROUTING_ELIGIBLE`), `real_n`, and the promotion criteria never block a route; they stay in the data as audit history.
 `DEGRADED` health caps the route's Stage C health term at 0.5; `UNKNOWN` validation and health are uncertainty, never a block.
 

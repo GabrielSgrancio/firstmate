@@ -561,6 +561,7 @@ export function selectContinuationRoute(capsule, {
     critical: escalation.critical,
     quotaOverrides: escalation.quotaOverrides,
     qualityFloor: escalation.qualityFloor,
+    requireSpawnable: true,
     useLiveAxi,
     now
   });

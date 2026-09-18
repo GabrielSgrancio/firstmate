@@ -1,0 +1,33 @@
+{
+  "description": "Router V3 full-pool activation: live provider verification microtasks (2026-09-18). One tiny PUBLIC completion per provider/model, run from the task worktree. No secrets recorded; every credential redacted.",
+  "data_class": "PUBLIC",
+  "method": "curl POST to each provider's chat endpoint (or `opencode run` for OpenCode-gated free-tier models) with <=120 output tokens; HTTP status, requested model, actual model (from response), latency, and token usage recorded. Rate-limit headers captured where emitted.",
+  "retrieved_at": "2026-09-18",
+  "probes": [
+    {"provider": "groq", "model": "qwen/qwen3.8-27b", "http_status": 200, "actual_model": "qwen/qwen3.8-27b", "latency_ms": 384, "total_tokens": 93, "output_correct": true, "availability": "AVAILABLE", "rate_limit_headers": {"limit_requests": 1000, "limit_tokens": 8000, "remaining_requests": 999, "reset_requests": "1m26.4s"}, "task": "slugify python function"},
+    {"provider": "groq", "model": "openai/gpt-oss-120b", "http_status": 200, "actual_model": "openai/gpt-oss-120b", "latency_ms": 414, "output_correct": true, "availability": "AVAILABLE", "task": "microtask pong"},
+    {"provider": "cloudflare_workers_ai", "model": "@cf/meta/llama-3.1-8b-instruct", "http_status": 200, "actual_model": "(account-scoped run, no model id in response)", "latency_ms": 704, "output_correct": true, "availability": "AVAILABLE", "task": "microtask pong"},
+    {"provider": "mistral", "model": "codestral-2508", "http_status": 200, "actual_model": "codestral-2508", "latency_ms": 882, "total_tokens": 82, "output_correct": true, "availability": "AVAILABLE", "task": "slugify python function", "note": "confirms firstmate's earlier per-model split: codestral-2508 usable; small/medium 429 limit-0; large/glm 403 tier_not_allowed (not re-burned here)"},
+    {"provider": "google_ai_studio", "model": "gemini-2.5-flash", "http_status": 404, "error": "no longer available to new users; use gemini-3.6-flash", "availability": "MODEL_UNAVAILABLE"},
+    {"provider": "google_ai_studio", "model": "gemini-3.6-flash", "http_status": 503, "error": "high demand, spikes usually temporary", "availability": "RATE_LIMITED", "note": "one later retry timed out at 30s; treat as transient overload, retest"},
+    {"provider": "openrouter", "model": "qwen/qwen3.8-27b:free", "http_status": 429, "error": "temporarily rate-limited upstream; retry shortly", "availability": "RATE_LIMITED"},
+    {"provider": "openrouter", "model": "deepseek/deepseek-v4-flash-0731:free", "http_status": 200, "actual_model": "deepseek/deepseek-v4-flash-0731:free", "latency_ms": 2382, "output_correct": true, "availability": "AVAILABLE", "task": "microtask pong"},
+    {"provider": "kilo", "model": "qwen/qwen3.8-27b:free", "http_status": 429, "error": "same upstream free-pool 429 as OpenRouter for this model id", "availability": "RATE_LIMITED"},
+    {"provider": "kilo", "model": "kilo-auto/free", "http_status": 200, "actual_model": "inclusionai/ling-3.0-flash-vl:free", "latency_ms": 1296, "output_correct": true, "availability": "AVAILABLE", "task": "microtask pong", "note": "auto route: Kilo picked the underlying model itself, confirming auto/fallback attribution must come from the response"},
+    {"provider": "nvidia_nim", "model": "deepseek-ai/deepseek-v4-flash-0731", "http_status": 0, "error": "request hung past 60s twice (no response)", "availability": "UNKNOWN", "note": "catalog lists 82 models (HTTP 200); completions unresponsive on tested id"},
+    {"provider": "nvidia_nim", "model": "nvidia/llama-3.1-nemotron-70b-instruct", "http_status": 404, "error": "Function not found for account", "availability": "MODEL_UNAVAILABLE"},
+    {"provider": "nvidia_nim", "model": "meta/llama-3.1-8b-instruct", "http_status": 410, "error": "end of life 2026-08-26", "availability": "MODEL_UNAVAILABLE"},
+    {"provider": "opencode_zen_free", "model": "mimo-v2.5-free", "http_status": 403, "error": "FreeTierError: free tier can only be used from within OpenCode (direct API)", "availability": "AVAILABLE_VIA_OPENCODE_HARNESS", "opencode_cli": {"exit": "pong", "model_echo": "mimo-v2.5-free"}},
+    {"provider": "opencode_zen_free", "model": "big-pickle", "http_status": 403, "error": "FreeTierError (direct API)", "availability": "AVAILABLE_VIA_OPENCODE_HARNESS", "opencode_cli": {"exit": "pong", "model_echo": "big-pickle"}},
+    {"provider": "opencode_go", "model": "mimo-v2.5", "http_status": 200, "actual_model": "mimo-v2.5", "total_tokens": 262, "availability": "AVAILABLE", "note": "direct Go API requires x-opencode-session header", "opencode_cli": {"exit": "pong", "model_echo": "mimo-v2.5"}}
+  ],
+  "opencode_go_usage_semantics": {
+    "endpoint": "GET https://opencode.ai/zen/go/v1/usage",
+    "fields": ["usage.rolling.percent", "usage.weekly.percent", "usage.monthly.percent"],
+    "per_model_field": null,
+    "docs_statement": "Each model has the following usage limits: 5-hour - 20% of the monthly limit; weekly - 50%; and monthly - 100% (per-model monthly $ limits published per model; source https://opencode.ai/docs/go/ retrieved 2026-09-18)",
+    "live_check": "usage before/after one 262-token MiMo V2.5 completion: rolling 3->3, weekly 48->48, monthly 40->40 (integer resolution; the request is far below 1% of any window)",
+    "conclusion": "Usage endpoint is aggregate-only and consistent with the documented per-model enforcement being summarized; per-model enforcement itself was NOT verified by a depletion experiment (weekly already at 48% used; exhausting a model risks disrupting real usage). Router models per-route allowance windows as primary with the aggregate pool as conservative fallback; residual uncertainty recorded.",
+    "depletion_experiment": "not run (deliberately)"
+  }
+}

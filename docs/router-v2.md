@@ -67,6 +67,23 @@ For `HIGH_RISK_TASK_CLASSES` in `bin/fm-routing-capability.mjs`, Stage B keeps t
 
 OpenCode Go discovery uses a child process environment for the bearer key and never interpolates credentials into a shell command or error message.
 
+## OpenCode Go per-model capacity
+
+OpenCode's own docs (https://opencode.ai/docs/go/) define Go limits per model: each model has its own 5h (20% of its monthly limit), weekly (50%), and monthly (100%) allowance. The live `GET /zen/go/v1/usage` endpoint reports only an aggregate rolling/weekly/monthly summary, so per-model enforcement is documented but not independently provable without a depletion experiment; the aggregate is kept as a fallback signal, not as the capacity model.
+OpenCode Go routes therefore carry an `allowance` block (`bin/fm-provider-discovery.mjs` `OPENCODE_GO_MODEL_ALLOWANCES`, source and retrieval date recorded, provider-published promo overrides carry their own `valid_until`), and `bin/fm-routing-economics.mjs` computes each route's own windows from telemetry attempt counts: a route whose own windows are exhausted is refused even while the aggregate pool shows headroom, and Stage C prices the route's own windows ahead of the pool numbers.
+`tests/fm-router-v3-full-pool.test.mjs` pins the window math and the promo expiry.
+
+## Free compute pool
+
+`FM_FREE_PROVIDER_KEYS_FILE` (default `~/.config/firstmate/free-provider-keys.env`) or plain environment keys let `bin/fm-provider-discovery.mjs refresh` also discover the zero-marginal-cost pool: Groq, OpenRouter free models, NVIDIA NIM, Google AI Studio, Cloudflare Workers AI, Mistral, Kilo, and OpenCode Zen free models. Each adapter registers per-model RouteTargets with route-level availability (`AVAILABLE`, `RATE_LIMITED`, `RATE_LIMITED_ZERO`, `TIER_BLOCKED`, `AUTH_FAILED`, `MODEL_UNAVAILABLE`, or `unknown`, which is priced rather than blocking), so one dead model never blocks a usable sibling.
+`node bin/fm-provider-discovery.mjs probe-free` runs at most four minimal PUBLIC completions per provider and records the observed states back into each catalog; 429/403/401/404 probes burn nothing.
+OpenCode Zen free models are only callable from inside the OpenCode client, so they register as real agent-session routes on the `opencode` harness (`zen-free:<model>`); every other free provider registers completion-only routes (`route_kind: api_completion`, `harness: null`) that routing and evaluation see but agent dispatch never selects.
+All free routes carry `spend_policy: FREE_RATE_LIMITED` and pool profiles that allow only `PUBLIC`/`SANITIZED` data (`docs/examples/free-provider-data-policy.json` holds the profiles to merge into a home's `config/data-policy.json`). PAYG stays blocked everywhere, so no free route can become a paid fallback and no provider can bill for a routed request.
+
+## Exploration
+
+Low-risk retry-tolerant PUBLIC/`SANITIZED`/`PRIVATE_CODE` work also carries a bounded exploration assignment: `bin/fm-router-v2.mjs` `scoreAndSelectRoute` occasionally selects the best-ranked Stage B survivor whose own exploration evidence is still missing (bootstrap rate 0.18, steady rate 0.05, never for critical or high-risk classes), records the assignment and the economic winner it displaced in `explorationDispatch`, and lets real outcomes accumulate against the priors.
+
 Dispatch requires intake-provisioned task and brief state, invokes the existing `bin/fm-spawn.sh` lifecycle owner with `--backend herdr`, and appends routing receipts without taking ownership of backlog, lease, worktree, or continuity state.
 
 ## Dispatch authority
