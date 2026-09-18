@@ -1,0 +1,308 @@
+[
+ {
+  "task_id": "task-01",
+  "task_name": "task-01",
+  "role": "fast_precise",
+  "data_class": "PUBLIC",
+  "effort": "low",
+  "critical": false,
+  "retry_tolerant": true,
+  "task_class": "targeted_edit"
+ },
+ {
+  "task_id": "task-02",
+  "task_name": "task-02",
+  "role": "fast_precise",
+  "data_class": "PUBLIC",
+  "effort": "low",
+  "critical": false,
+  "retry_tolerant": true,
+  "task_class": "targeted_edit"
+ },
+ {
+  "task_id": "task-03",
+  "task_name": "task-03",
+  "role": "fast_precise",
+  "data_class": "PUBLIC",
+  "effort": "low",
+  "critical": false,
+  "retry_tolerant": true,
+  "task_class": "targeted_edit"
+ },
+ {
+  "task_id": "task-04",
+  "task_name": "task-04",
+  "role": "cheap_tool_worker",
+  "data_class": "PUBLIC",
+  "effort": "low",
+  "critical": false,
+  "retry_tolerant": true,
+  "task_class": "mechanical_tool_work"
+ },
+ {
+  "task_id": "task-05",
+  "task_name": "task-05",
+  "role": "cheap_tool_worker",
+  "data_class": "PUBLIC",
+  "effort": "low",
+  "critical": false,
+  "retry_tolerant": true,
+  "task_class": "mechanical_tool_work"
+ },
+ {
+  "task_id": "task-06",
+  "task_name": "task-06",
+  "role": "cheap_tool_worker",
+  "data_class": "PUBLIC",
+  "effort": "low",
+  "critical": false,
+  "retry_tolerant": true,
+  "task_class": "mechanical_tool_work"
+ },
+ {
+  "task_id": "task-07",
+  "task_name": "task-07",
+  "role": "strong_cheap_worker",
+  "data_class": "PUBLIC",
+  "effort": "medium",
+  "critical": false,
+  "retry_tolerant": true,
+  "task_class": "test_generation"
+ },
+ {
+  "task_id": "task-08",
+  "task_name": "task-08",
+  "role": "strong_cheap_worker",
+  "data_class": "PUBLIC",
+  "effort": "medium",
+  "critical": false,
+  "retry_tolerant": true,
+  "task_class": "test_generation"
+ },
+ {
+  "task_id": "task-09",
+  "task_name": "task-09",
+  "role": "strong_cheap_worker",
+  "data_class": "PUBLIC",
+  "effort": "medium",
+  "critical": false,
+  "retry_tolerant": true,
+  "task_class": "test_generation"
+ },
+ {
+  "task_id": "task-10",
+  "task_name": "task-10",
+  "role": "general_engineer",
+  "data_class": "PUBLIC",
+  "effort": "medium",
+  "critical": false,
+  "retry_tolerant": false,
+  "task_class": "refactor"
+ },
+ {
+  "task_id": "task-11",
+  "task_name": "task-11",
+  "role": "general_engineer",
+  "data_class": "PUBLIC",
+  "effort": "medium",
+  "critical": false,
+  "retry_tolerant": false,
+  "task_class": "refactor"
+ },
+ {
+  "task_id": "task-12",
+  "task_name": "task-12",
+  "role": "general_engineer",
+  "data_class": "PUBLIC",
+  "effort": "medium",
+  "critical": false,
+  "retry_tolerant": false,
+  "task_class": "refactor"
+ },
+ {
+  "task_id": "task-13",
+  "task_name": "task-13",
+  "role": "fast_context",
+  "data_class": "PUBLIC",
+  "effort": "low",
+  "critical": false,
+  "retry_tolerant": true,
+  "task_class": "large_context_repository_retrieval"
+ },
+ {
+  "task_id": "task-14",
+  "task_name": "task-14",
+  "role": "fast_context",
+  "data_class": "PUBLIC",
+  "effort": "low",
+  "critical": false,
+  "retry_tolerant": true,
+  "task_class": "large_context_repository_retrieval"
+ },
+ {
+  "task_id": "task-15",
+  "task_name": "task-15",
+  "role": "fast_context",
+  "data_class": "PUBLIC",
+  "effort": "low",
+  "critical": false,
+  "retry_tolerant": true,
+  "task_class": "large_context_repository_retrieval"
+ },
+ {
+  "task_id": "task-16",
+  "task_name": "task-16",
+  "role": "deep_context",
+  "data_class": "PUBLIC",
+  "effort": "high",
+  "critical": false,
+  "retry_tolerant": true,
+  "task_class": "large_context_repository_retrieval"
+ },
+ {
+  "task_id": "task-17",
+  "task_name": "task-17",
+  "role": "deep_context",
+  "data_class": "PUBLIC",
+  "effort": "medium",
+  "critical": false,
+  "retry_tolerant": true,
+  "task_class": "large_context_repository_retrieval"
+ },
+ {
+  "task_id": "task-18",
+  "task_name": "task-18",
+  "role": "deep_context",
+  "data_class": "PUBLIC",
+  "effort": "medium",
+  "critical": false,
+  "retry_tolerant": true,
+  "task_class": "large_context_repository_retrieval"
+ },
+ {
+  "task_id": "task-19",
+  "task_name": "task-19",
+  "role": "autonomous_engineer",
+  "data_class": "PUBLIC",
+  "effort": "medium",
+  "critical": false,
+  "retry_tolerant": false,
+  "task_class": "multi_file_feature"
+ },
+ {
+  "task_id": "task-20",
+  "task_name": "task-20",
+  "role": "autonomous_engineer",
+  "data_class": "PUBLIC",
+  "effort": "medium",
+  "critical": false,
+  "retry_tolerant": false,
+  "task_class": "multi_file_feature"
+ },
+ {
+  "task_id": "task-21",
+  "task_name": "task-21",
+  "role": "autonomous_engineer",
+  "data_class": "PUBLIC",
+  "effort": "medium",
+  "critical": false,
+  "retry_tolerant": false,
+  "task_class": "multi_file_feature"
+ },
+ {
+  "task_id": "task-22",
+  "task_name": "task-22",
+  "role": "deep_engineer",
+  "data_class": "PUBLIC",
+  "effort": "medium",
+  "critical": false,
+  "retry_tolerant": false,
+  "task_class": "brownfield_debugging"
+ },
+ {
+  "task_id": "task-23",
+  "task_name": "task-23",
+  "role": "deep_engineer",
+  "data_class": "PUBLIC",
+  "effort": "medium",
+  "critical": false,
+  "retry_tolerant": false,
+  "task_class": "brownfield_debugging"
+ },
+ {
+  "task_id": "task-24",
+  "task_name": "task-24",
+  "role": "deep_engineer",
+  "data_class": "PUBLIC",
+  "effort": "medium",
+  "critical": false,
+  "retry_tolerant": false,
+  "task_class": "brownfield_debugging"
+ },
+ {
+  "task_id": "task-25",
+  "task_name": "task-25",
+  "role": "architect_synthesizer",
+  "data_class": "PUBLIC",
+  "effort": "high",
+  "critical": false,
+  "retry_tolerant": false,
+  "task_class": "architecture_reasoning"
+ },
+ {
+  "task_id": "task-26",
+  "task_name": "task-26",
+  "role": "architect_synthesizer",
+  "data_class": "PUBLIC",
+  "effort": "medium",
+  "critical": false,
+  "retry_tolerant": false,
+  "task_class": "architecture_reasoning"
+ },
+ {
+  "task_id": "task-27",
+  "task_name": "task-27",
+  "role": "architect_synthesizer",
+  "data_class": "PUBLIC",
+  "effort": "medium",
+  "critical": false,
+  "retry_tolerant": false,
+  "task_class": "architecture_reasoning"
+ },
+ {
+  "task_id": "task-28",
+  "task_name": "task-28",
+  "role": "critical_auditor",
+  "data_class": "PUBLIC",
+  "effort": "high",
+  "critical": true,
+  "retry_tolerant": false,
+  "snapshot": "snapshot_1_current_real",
+  "outcome": "REJECTED",
+  "error": "No routes meet quality floor 0.9600 for role \"critical_auditor\" with dataClass \"PUBLIC\". Rejections: claude:claude-fable-5-1:low: Hard blocker: spend policy CREDIT_GATED; claude:claude-fable-5-1:medium: Hard blocker: spend policy CREDIT_GATED; claude:claude-fable-5-1:high: Hard blocker: spend policy CREDIT_GATED; codex:gpt-5.6-sol:low: Effort low does not satisfy explicitly requested effort high; codex:gpt-5.6-sol:medium: Effort medium does not satisfy explicitly requested effort high; codex:gpt-5.6-sol:high: Quota Pool Exhausted; codex:gpt-5.6-sol:xhigh: Effort xhigh does not satisfy explicitly requested effort high; codex:gpt-5.6-sol:max: Effort max does not satisfy explicitly requested effort high; codex:gpt-5.6-sol:ultra: Effort ultra does not satisfy explicitly requested effort high; codex:gpt-6-astra:low: Effort low does not satisfy explicitly requested effort high; codex:gpt-6-astra:medium: Effort medium does not satisfy explicitly requested effort high; codex:gpt-6-astra:high: Quota Pool Exhausted; codex:gpt-6-astra:xhigh: Effort xhigh does not satisfy explicitly requested effort high; codex:gpt-6-astra:max: Effort max does not satisfy explicitly requested effort high; codex:gpt-6-astra:ultra: Effort ultra does not satisfy explicitly requested effort high; codex:gpt-5.6-terra:low: Effort low does not satisfy explicitly requested effort high; codex:gpt-5.6-terra:medium: Effort medium does not satisfy explicitly requested effort high; codex:gpt-5.6-terra:high: Quota Poo"
+ },
+ {
+  "task_id": "task-29",
+  "task_name": "task-29",
+  "role": "critical_auditor",
+  "data_class": "SECRET",
+  "effort": "high",
+  "critical": true,
+  "retry_tolerant": false,
+  "snapshot": "snapshot_1_current_real",
+  "outcome": "REJECTED",
+  "error": "No viable RouteTargets for role \"critical_auditor\" with dataClass \"SECRET\". Rejections: claude:claude-fable-5-1:low: Hard blocker: spend policy CREDIT_GATED; claude:claude-fable-5-1:medium: Hard blocker: spend policy CREDIT_GATED; claude:claude-fable-5-1:high: Hard blocker: spend policy CREDIT_GATED; codex:gpt-5.6-sol:low: Effort low does not satisfy explicitly requested effort high; codex:gpt-5.6-sol:medium: Effort medium does not satisfy explicitly requested effort high; codex:gpt-5.6-sol:high: Data Policy Rejected: SECRET data is strictly excluded from all model context under any provider; codex:gpt-5.6-sol:xhigh: Effort xhigh does not satisfy explicitly requested effort high; codex:gpt-5.6-sol:max: Effort max does not satisfy explicitly requested effort high; codex:gpt-5.6-sol:ultra: Effort ultra does not satisfy explicitly requested effort high; codex:gpt-6-astra:low: Effort low does not satisfy explicitly requested effort high; codex:gpt-6-astra:medium: Effort medium does not satisfy explicitly requested effort high; codex:gpt-6-astra:high: Data Policy Rejected: SECRET data is strictly excluded from all model context under any provider; codex:gpt-6-astra:xhigh: Effort xhigh does not satisfy explicitly requested effort high; codex:gpt-6-astra:max: Effort max does not satisfy explicitly requested effort high; codex:gpt-6-astra:ultra: Effort ultra does not satisfy explicitly requested effort high; codex:gpt-5.6-terra:low: Effort low does not satisfy explicitly requested ef"
+ },
+ {
+  "task_id": "task-30",
+  "task_name": "task-30",
+  "role": "critical_auditor",
+  "data_class": "PUBLIC",
+  "effort": "high",
+  "critical": true,
+  "retry_tolerant": false,
+  "snapshot": "snapshot_1_current_real",
+  "outcome": "REJECTED",
+  "error": "No routes meet quality floor 0.9600 for role \"critical_auditor\" with dataClass \"PUBLIC\". Rejections: claude:claude-fable-5-1:low: Hard blocker: spend policy CREDIT_GATED; claude:claude-fable-5-1:medium: Hard blocker: spend policy CREDIT_GATED; claude:claude-fable-5-1:high: Hard blocker: spend policy CREDIT_GATED; codex:gpt-5.6-sol:low: Effort low does not satisfy explicitly requested effort high; codex:gpt-5.6-sol:medium: Effort medium does not satisfy explicitly requested effort high; codex:gpt-5.6-sol:high: Quota Pool Exhausted; codex:gpt-5.6-sol:xhigh: Effort xhigh does not satisfy explicitly requested effort high; codex:gpt-5.6-sol:max: Effort max does not satisfy explicitly requested effort high; codex:gpt-5.6-sol:ultra: Effort ultra does not satisfy explicitly requested effort high; codex:gpt-6-astra:low: Effort low does not satisfy explicitly requested effort high; codex:gpt-6-astra:medium: Effort medium does not satisfy explicitly requested effort high; codex:gpt-6-astra:high: Quota Pool Exhausted; codex:gpt-6-astra:xhigh: Effort xhigh does not satisfy explicitly requested effort high; codex:gpt-6-astra:max: Effort max does not satisfy explicitly requested effort high; codex:gpt-6-astra:ultra: Effort ultra does not satisfy explicitly requested effort high; codex:gpt-5.6-terra:low: Effort low does not satisfy explicitly requested effort high; codex:gpt-5.6-terra:medium: Effort medium does not satisfy explicitly requested effort high; codex:gpt-5.6-terra:high: Quota Poo"
+ }
+]

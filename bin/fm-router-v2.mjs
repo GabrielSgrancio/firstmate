@@ -845,6 +845,13 @@ export function stageAHardRequirements({
       reject('Route is completion-only and cannot host an agent session');
       continue;
     }
+    // Agent dispatch requires tool calling: a free-provider model that rejects
+    // tools cannot host an fm-spawn worker session even with a working endpoint.
+    if (requireSpawnable && route.supports_tools === false) {
+      reject('Provider model does not support tool calling (agent session)');
+      continue;
+    }
+
     // Captain policy and spend facts, re-checked here for callers that build
     // candidates themselves.  Evaluation lifecycle stages (CHALLENGER and the
     // rest) are audit history and never reject a route.

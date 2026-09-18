@@ -972,6 +972,7 @@ export function compileFreeRouteTargets(freeProviders) {
         spend_policy: 'FREE_RATE_LIMITED',
         auto_routing: isAuto,
         ...(m.may_train_on_prompts !== undefined ? { may_train_on_prompts: m.may_train_on_prompts } : {}),
+        ...(m.supports_tools !== undefined ? { supports_tools: m.supports_tools } : {}),
         provider_path: 'opencode_custom_provider',
         ...(isAuto ? { auto_route: true } : {}),
         reasoning_effort: null,
@@ -1120,13 +1121,17 @@ export async function probeFreeProviders({ keys = readFreeProviderKeys(), maxPer
     },
     {
       catalog: 'cloudflare_workers_ai',
-      transport: 'cloudflare_workers_ai',
+      transport: 'openai_compatible_http',
       key: keys.CLOUDFLARE_API_TOKEN,
       account: keys.CLOUDFLARE_ACCOUNT_ID,
       endpoint: (model) => `https://api.cloudflare.com/client/v4/accounts/${keys.CLOUDFLARE_ACCOUNT_ID}/ai/run/${model}`,
       body: () => ({ messages: PUBLIC_PROBE_PROMPT, max_tokens: 16 })
     }
   ];
+  const TOOL_PROBE_SPEC = [{
+    type: 'function',
+    function: { name: 'pool_probe_tool', description: 'Ping probe for agent-capable route detection', parameters: { type: 'object', properties: { word: { type: 'string' } }, required: ['word'] } }
+  }];
   const summary = {};
   for (const attempt of attempts) {
     if (!attempt.key || (attempt.catalog === 'cloudflare_workers_ai' && !attempt.account)) {
@@ -1172,6 +1177,36 @@ export async function probeFreeProviders({ keys = readFreeProviderKeys(), maxPer
         m.availability_evidence = { http_status: status, checked_at: new Date().toISOString() };
       } else if (error) {
         m.availability_evidence = { error, checked_at: new Date().toISOString() };
+      }
+      // Agent dispatch needs tool calling; a model that rejects tools cannot
+      // carry an fm-spawn worker session even when plain completion works.
+      if (attempt.transport === 'openai_compatible_http' && availability === 'available' && !error) {
+        try {
+          await new Promise((resolve) => setTimeout(resolve, 400));
+          const toolResponse = await fetch(attempt.endpoint(m.raw_id), {
+            method: 'POST',
+            headers: { ...auth(attempt.key), 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              ...attempt.body(m.raw_id),
+              tools: TOOL_PROBE_SPEC
+            }),
+            signal: AbortSignal.timeout(20000)
+          });
+          const toolBody = await toolResponse.text();
+          const toolBodyErr = toolBody.slice(0, 400);
+          if (toolResponse.status === 200) {
+            m.supports_tools = true;
+          } else if ((toolResponse.status === 400 || toolResponse.status === 422) &&
+            /tool\s*calling is not supported|does not support/i.test(toolBodyErr)) {
+            m.supports_tools = false;
+          }
+          // Any other status (429 upstream, 5xx) leaves supports_tools unset:
+          // unknown capability is priced, never guessed.
+          m.tools_probe_evidence = { http_status: toolResponse.status, ...(m.supports_tools !== undefined ? { supports_tools: m.supports_tools } : {}), checked_at: new Date().toISOString() };
+          results.push({ model: `${m.raw_id} (tool-probe)`, http_status: toolResponse.status, ...(m.supports_tools !== undefined ? { supports_tools: m.supports_tools } : {}) });
+        } catch (toolError) {
+          results.push({ model: `${m.raw_id} (tool-probe)`, error: String(toolError.message || toolError).slice(0, 120) });
+        }
       }
       results.push({ model: m.raw_id, http_status: status, availability: m.availability, ...(error ? { error } : {}) });
     }
@@ -1464,8 +1499,38 @@ export function refreshAllCatalogs(options = {}) {
 // targets with them included, and seeds the free pools into the quota map.
 export async function refreshFreeProviderCatalogs({ quotaMapPath = path.join(FM_HOME, 'data/quota-pool-map.json') } = {}) {
   const freeProviders = await discoverFreeProviders();
-  let freeCount = 0;
+  // Probe evidence (availability / tool-calling capability recorded by
+  // probe-free) must survive a refresh: a fresh discovery starts each model at
+  // `unknown`, so observed money-free facts are merged back for models that are
+  // still in the live catalog. Withdrawn models simply disappear again.
+  const refreshed = {};
   for (const [name, catalog] of Object.entries(freeProviders)) {
+    const previousPath = path.join(CATALOG_DIR, `${name}.json`);
+    let probingEvidence = {};
+    try {
+      if (fs.existsSync(previousPath)) {
+        for (const m of (JSON.parse(fs.readFileSync(previousPath, 'utf8')).models || [])) {
+          probingEvidence[m.raw_id] = m;
+        }
+      }
+    } catch {
+      // stale unreadable snapshot; fresh discovery stands alone
+    }
+    const staleOrFresh = catalog.discovered_at;
+    for (const m of catalog.models) {
+      const previous = probingEvidence[m.raw_id];
+      if (previous) {
+        if (m.availability === 'unknown' && previous.availability) m.availability = previous.availability;
+        if (previous.supports_tools !== undefined) m.supports_tools = previous.supports_tools;
+        if (previous.tools_probe_evidence) m.tools_probe_evidence = previous.tools_probe_evidence;
+        if (previous.availability_evidence) m.availability_evidence = previous.availability_evidence;
+      }
+    }
+    refreshed[name] = catalog;
+    void staleOrFresh;
+  }
+  let freeCount = 0;
+  for (const [name, catalog] of Object.entries(refreshed)) {
     fs.writeFileSync(path.join(CATALOG_DIR, `${name}.json`), JSON.stringify(catalog, null, 2));
     freeCount += catalog.count || 0;
   }
