@@ -310,4 +310,21 @@ assert.equal(seeded.pools.groq_free.kind, 'free_rate_limited');
 assert.equal(seeded.pools.opencode_zen_free.harness, 'opencode');
 assert.equal(seeded.pools.mistral_free.status, 'HEALTHY');
 
+// Catalog drift: a model that the live provider no longer lists can no longer
+// reach the compiled routes, so withdrawn free offers (e.g. OpenCode's Union
+// Alpha Free) leave the pool automatically on the next refresh.
+const withdrawn = compileFreeRouteTargets({
+  ...freeProviders,
+  kilo: { ...freeProviders.kilo, models: freeProviders.kilo.models.filter((m) => m.raw_id !== 'kilo-auto/free') }
+});
+assert.ok(!withdrawn.some((r) => r.route_id === 'kilo:kilo-auto/free'), 'withdrawn free models leave the compiled pool automatically');
+assert.ok(compileFreeRouteTargets(freeProviders).some((r) => r.route_id === 'kilo:kilo-auto/free'), 'and reappear only if the live catalog returns them');
+
+// The generated OpenCode custom-provider file carries env REFERENCES, not
+// secret values.
+const customProviderDef = writeOpenCodeCustomProviders(freeProviders, { keysPath: '/tmp/fm-test-keys.env' });
+const defText = JSON.stringify(customProviderDef);
+assert.ok(customProviderDef.providers.kilo, 'kilo custom provider written');
+assert.ok(!defText.includes('kilo_secret_value_fixture'), 'no secret value ever lands in the generated provider file');
+
 console.log('Router V3 full-pool regressions passed');
